@@ -356,6 +356,241 @@ func TestBuildBackend_AppliesStreamIdleTimeoutAndThinkingOptions(t *testing.T) {
 	if bNoIdle.(*CloudBackend).streamIdleTimeout != 0 {
 		t.Errorf("negative StreamIdleTimeout should disable idle guard (0), got %s", bNoIdle.(*CloudBackend).streamIdleTimeout)
 	}
+
+	bDefault, err := BuildBackend(ModelTarget{
+		Model:    "test-reasoning-model",
+		Protocol: ProtocolOpenAI,
+		Endpoint: "http://127.0.0.1:8080",
+	}, CloudBackendOptions{})
+	if err != nil {
+		t.Fatalf("BuildBackend zero idle: %v", err)
+	}
+	if bDefault.(*CloudBackend).streamIdleTimeout != defaultStreamIdleTimeout {
+		t.Errorf("zero StreamIdleTimeout = %s, want %s", bDefault.(*CloudBackend).streamIdleTimeout, defaultStreamIdleTimeout)
+	}
+
+	tVal := true
+	bCloud, err := BuildBackend(ModelTarget{
+		Model:        "cloud-model",
+		Protocol:     ProtocolCloud,
+		ProviderName: "openrouter",
+		Endpoint:     "https://example.invalid/api/v1",
+	}, CloudBackendOptions{
+		ProviderKind:      "openai",
+		APIKey:            "k",
+		StreamIdleTimeout: 9 * time.Second,
+		Thinking:          &tVal,
+	})
+	if err != nil {
+		t.Fatalf("BuildBackend ProtocolCloud: %v", err)
+	}
+	cbCloud := bCloud.(*CloudBackend)
+	if cbCloud.streamIdleTimeout != 9*time.Second {
+		t.Errorf("ProtocolCloud streamIdleTimeout = %s, want 9s", cbCloud.streamIdleTimeout)
+	}
+	if cbCloud.thinking == nil || !*cbCloud.thinking {
+		t.Errorf("ProtocolCloud thinking = %v, want *true", cbCloud.thinking)
+	}
+}
+
+func TestCloudBackend_DisabledIdleTimeoutAllowsLongPause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"there\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	b, err := BuildBackend(ModelTarget{
+		Model:    "slow",
+		Protocol: ProtocolOpenAI,
+		Endpoint: server.URL,
+	}, CloudBackendOptions{StreamIdleTimeout: -1})
+	if err != nil {
+		t.Fatalf("BuildBackend: %v", err)
+	}
+	resp, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream with disabled idle timeout: %v", err)
+	}
+	if resp.Content != "hi there" {
+		t.Fatalf("content = %q, want %q", resp.Content, "hi there")
+	}
+}
+
+func TestCloudBackend_PreHeaderIdleTimeout(t *testing.T) {
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer func() {
+		close(done)
+		server.Close()
+	}()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "slow-prefill", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	b.streamIdleTimeout = 25 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = b.ChatStream(ctx, []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "stream idle timeout") {
+		t.Fatalf("pre-header idle error = %v, want stream idle timeout wrapping DeadlineExceeded", err)
+	}
+}
+
+func TestCloudBackend_ParentDeadlineDoesNotReportIdleTimeout(t *testing.T) {
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer func() {
+		close(done)
+		server.Close()
+	}()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "slow-local", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	b.streamIdleTimeout = 500 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = b.ChatStream(ctx, []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err == nil || strings.Contains(err.Error(), "stream idle timeout") || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline error = %v, want plain DeadlineExceeded without idle message", err)
+	}
+}
+
+func TestCloudBackend_ThinkingOptionAndContextOverride(t *testing.T) {
+	var mu sync.Mutex
+	var got []any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		if kw, ok := body["chat_template_kwargs"].(map[string]any); ok {
+			got = append(got, kw["enable_thinking"])
+		} else {
+			got = append(got, nil)
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	tVal := true
+	b, err := BuildBackend(ModelTarget{
+		Model:    "qwen",
+		Protocol: ProtocolOpenAI,
+		Endpoint: server.URL,
+	}, CloudBackendOptions{Thinking: &tVal})
+	if err != nil {
+		t.Fatalf("BuildBackend: %v", err)
+	}
+	if _, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "reason"}}, nil, io.Discard); err != nil {
+		t.Fatalf("ChatStream(default true): %v", err)
+	}
+	if _, err := b.ChatStream(WithDisableThinking(context.Background()), []chat.Message{{Role: chat.RoleUser, Content: "compact"}}, nil, io.Discard); err != nil {
+		t.Fatalf("ChatStream(WithDisableThinking): %v", err)
+	}
+	want := []any{true, false}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("enable_thinking history = %v, want %v", got, want)
+	}
+}
+
+func TestCloudBackend_EnableThinking4xxFallback(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, has := body["chat_template_kwargs"]; has {
+			http.Error(w, `{"error":{"message":"Unknown field: enable_thinking"}}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "strict-proxy", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	resp, err := b.ChatStream(WithDisableThinking(context.Background()), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.Content != "ok" || calls != 2 {
+		t.Fatalf("content=%q calls=%d, want %q and 2", resp.Content, calls, "ok")
+	}
+}
+
+func TestCloudBackend_ThinkingThenToolCallsClosesThought(t *testing.T) {
+	// OpenAI: reasoning_content followed directly by delta.tool_calls (empty content)
+	openAISrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan call\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"axis_status\",\"arguments\":\"{}\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer openAISrv.Close()
+
+	bOAI, err := NewOpenAICompatibleBackend(openAISrv.URL, "m", "")
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleBackend: %v", err)
+	}
+	sinkOAI := &recordingThoughtSink{}
+	respOAI, err := bOAI.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "go"}}, nil, sinkOAI)
+	if err != nil {
+		t.Fatalf("OpenAI ChatStream: %v", err)
+	}
+	if len(respOAI.ToolCalls) != 1 || sinkOAI.closed != 1 || strings.Join(sinkOAI.thoughts, "") != "plan call" {
+		t.Fatalf("OpenAI tool-boundary thought close mismatch: tools=%d closed=%d thoughts=%v", len(respOAI.ToolCalls), sinkOAI.closed, sinkOAI.thoughts)
+	}
+
+	// Anthropic: thinking_delta followed directly by tool_use block (empty text_delta)
+	anthSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan call\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"axis_status\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n")
+	}))
+	defer anthSrv.Close()
+
+	bAnth, err := NewCloudBackendWithKey("anthropic", "anthropic", anthSrv.URL, "k", "test-model", 0)
+	if err != nil {
+		t.Fatalf("NewCloudBackendWithKey: %v", err)
+	}
+	sinkAnth := &recordingThoughtSink{}
+	respAnth, err := bAnth.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "go"}}, nil, sinkAnth)
+	if err != nil {
+		t.Fatalf("Anthropic ChatStream: %v", err)
+	}
+	if len(respAnth.ToolCalls) != 1 || sinkAnth.closed != 1 || strings.Join(sinkAnth.thoughts, "") != "plan call" {
+		t.Fatalf("Anthropic tool-boundary thought close mismatch: tools=%d closed=%d thoughts=%v", len(respAnth.ToolCalls), sinkAnth.closed, sinkAnth.thoughts)
+	}
 }
 
 func TestCloudBackend_ParentCancelDoesNotReportIdleTimeout(t *testing.T) {

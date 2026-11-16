@@ -100,3 +100,15 @@ func TestColorWriterClosePropagatesWriteError(t *testing.T) {
 		t.Fatalf("expected Close to propagate write error, got %v", err)
 	}
 }
+
+func TestColorWriterCloseCallsCloseThought(t *testing.T) {
+	sink := &recordingThoughtSink{}
+	cw := NewColorWriter(sink)
+	cw.WriteThought("open thought")
+	if err := cw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if sink.closed != 1 {
+		t.Fatalf("closed = %d, want 1", sink.closed)
+	}
+}

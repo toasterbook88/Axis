@@ -28,12 +28,16 @@ func (m Model) liveActivity() []Line {
 	var lines []Line
 	showing := false
 
-	if text := m.stream.String(); text != "" {
-		_, answer, inThought := parseStreamThought(text)
+	var text string
+	if m.stream != nil {
+		text = m.stream.String()
+	}
+	if m.inOutOfBandThought || text != "" {
+		_, answer, inlineInThought := parseStreamThought(text)
 		// A thought with no answer tokens yet is the thinking phase, unless
 		// a pending tool, an open overlay or the cancelling phase already
 		// says what the turn is doing. The thought body never shows here.
-		if inThought || strings.TrimSpace(answer) == "" {
+		if m.inOutOfBandThought || inlineInThought || strings.TrimSpace(answer) == "" {
 			if len(m.pendingTools) == 0 && m.overlay == nil && m.state != turnCancelling {
 				lines = append(lines, clipLine(frame+" thinking", budget, StyleMuted))
 				showing = true

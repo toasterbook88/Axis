@@ -77,16 +77,14 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 	if w.closed {
 		return len(p), nil
 	}
-	if w.inThought {
-		w.inThought = false
-		w.enqueueLocked([]byte("</think>"))
-	}
+	w.closeThoughtLocked()
 	w.enqueueLocked(p)
 	return len(p), nil
 }
 
-// WriteThought emits out-of-band reasoning text wrapped in <think> tags for
-// the console's live thinking spinner and collapsed transcript entry.
+// WriteThought emits out-of-band reasoning tokens via ThoughtChunkMsg so the
+// console's live thinking spinner and collapsed transcript entry work cleanly
+// even if the reasoning text contains literal </think> tokens.
 func (w *streamWriter) WriteThought(thought string) {
 	if thought == "" {
 		return
@@ -96,22 +94,33 @@ func (w *streamWriter) WriteThought(thought string) {
 	if w.closed {
 		return
 	}
-	if !w.inThought {
-		w.inThought = true
-		w.enqueueLocked([]byte("<think>"))
+	if len(w.pending) > 0 {
+		w.flushLocked(true)
 	}
-	w.enqueueLocked([]byte(thought))
+	w.inThought = true
+	if w.to != nil {
+		w.to.Send(ThoughtChunkMsg{Turn: w.turn, Text: thought})
+	}
 }
 
-// CloseThought closes an open <think> wrapper when reasoning ends without visible text.
+// CloseThought finishes the active out-of-band reasoning span cleanly.
 func (w *streamWriter) CloseThought() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || !w.inThought {
+	if w.closed {
+		return
+	}
+	w.closeThoughtLocked()
+}
+
+func (w *streamWriter) closeThoughtLocked() {
+	if !w.inThought {
 		return
 	}
 	w.inThought = false
-	w.enqueueLocked([]byte("</think>"))
+	if w.to != nil {
+		w.to.Send(ThoughtChunkMsg{Turn: w.turn, Done: true})
+	}
 }
 
 // enqueueLocked appends p to pending and triggers/schedules a flush.
@@ -135,10 +144,7 @@ func (w *streamWriter) Close() error {
 	if w.closed {
 		return nil
 	}
-	if w.inThought {
-		w.inThought = false
-		w.pending = append(w.pending, "</think>"...)
-	}
+	w.closeThoughtLocked()
 	w.closed = true
 	w.flushLocked(true)
 	return nil

@@ -4,6 +4,16 @@ import (
 	"strings"
 )
 
+func joinNonEmptyThoughts(parts ...string) string {
+	nonEmpty := parts[:0]
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			nonEmpty = append(nonEmpty, trimmed)
+		}
+	}
+	return strings.Join(nonEmpty, "\n\n")
+}
+
 // extractThought splits text into reasoning thought (from <think>...</think>
 // spans) and final response answer. If no <think> block exists, thought is empty
 // and answer is the original text. Multiple spans across tool rounds are joined

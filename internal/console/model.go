@@ -41,6 +41,15 @@ type StreamChunkMsg struct {
 	Text string
 }
 
+// ThoughtChunkMsg carries out-of-band model reasoning tokens separately from
+// visible answer content so literal </think> text inside reasoning never leaks
+// into the assistant answer. Done marks the end of a reasoning span.
+type ThoughtChunkMsg struct {
+	Turn TurnID
+	Text string
+	Done bool
+}
+
 // ToolPendingMsg marks a tool call as in flight. It never commits to
 // scrollback: the pending card renders in the ephemeral region and is
 // retired when the completion entry (or the turn) lands. Args are already
@@ -176,10 +185,15 @@ type Model struct {
 
 	// Thinking-span receipt measurement: chunk arrival is stamped at the
 	// inThought transitions (only the console sees where the reasoning
-	// block begins and ends in the stream).
-	inThought    bool
-	thoughtStart time.Time
-	thoughtEnd   time.Time
+	// block begins and ends in the stream). Out-of-band reasoning chunks
+	// accumulate in thoughtBuf separately from the answer stream.
+	inThought          bool
+	inOutOfBandThought bool
+	oobThoughtSep      bool
+	thoughtBuf         *strings.Builder
+	thoughtStart       time.Time
+	thoughtEnd         time.Time
+	thoughtElapsed     time.Duration
 
 	// lastThought retains the most recent committed thinking block in full
 	// for /thought (committed entries are immutable and not re-rendered).
@@ -510,6 +524,30 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		m.stampThinkingSpan()
 		return m, nil
 
+	case ThoughtChunkMsg:
+		if m.stale(msg.Turn) {
+			return m, nil
+		}
+		if msg.Text != "" {
+			if m.thoughtBuf == nil {
+				m.thoughtBuf = &strings.Builder{}
+			}
+			if m.oobThoughtSep && m.thoughtBuf.Len() > 0 {
+				m.thoughtBuf.WriteString("\n\n")
+			}
+			m.oobThoughtSep = false
+			m.thoughtBuf.WriteString(msg.Text)
+			m.inOutOfBandThought = true
+		}
+		if msg.Done {
+			m.inOutOfBandThought = false
+			if m.thoughtBuf != nil && m.thoughtBuf.Len() > 0 {
+				m.oobThoughtSep = true
+			}
+		}
+		m.stampThinkingSpan()
+		return m, nil
+
 	case ToolPendingMsg:
 		if m.stale(msg.Turn) {
 			return m, nil
@@ -641,27 +679,36 @@ func (m *Model) flushPendingTools(turn TurnID) {
 }
 
 // stampThinkingProgress tracks the inThought transitions across chunk
-// arrival: start on false->true, end on true->false. The elapsed is a
-// receipt-measured span (console-observed), the same honesty level as the
+// arrival: start on false->true, accumulate and end on true->false. The elapsed
+// is a receipt-measured span (console-observed), the same honesty level as the
 // ToolEntry elapsed is agent-measured where the agent owns timing.
 func (m *Model) stampThinkingSpan() {
-	_, _, inThought := parseStreamThought(m.stream.String())
+	active := m.inOutOfBandThought || inlineInThought(m.stream)
+	now := m.now()
 	switch {
-	case inThought && !m.inThought:
-		m.thoughtStart = m.now()
-	case !inThought && m.inThought:
-		m.thoughtEnd = m.now()
+	case active && !m.inThought:
+		m.thoughtStart = now
+	case !active && m.inThought:
+		if !m.thoughtStart.IsZero() {
+			m.thoughtElapsed += now.Sub(m.thoughtStart)
+		}
+		m.thoughtEnd = now
 	}
-	m.inThought = inThought
+	m.inThought = active
 }
 
-// thinkingElapsed returns the measured thinking span for the finished turn,
-// zero when none was observed or the span is still open.
-func (m Model) thinkingElapsed() time.Duration {
-	if m.thoughtEnd.IsZero() || m.thoughtStart.IsZero() {
-		return 0
+func inlineInThought(stream *strings.Builder) bool {
+	if stream == nil || stream.Len() == 0 {
+		return false
 	}
-	return m.thoughtEnd.Sub(m.thoughtStart)
+	_, _, in := parseStreamThought(stream.String())
+	return in
+}
+
+// thinkingElapsed returns the cumulative measured duration of closed thinking
+// spans for the finished turn, or zero when none closed cleanly.
+func (m Model) thinkingElapsed() time.Duration {
+	return m.thoughtElapsed
 }
 
 func (m *Model) syncEditor() {
@@ -1027,10 +1074,25 @@ func (m Model) beginTurn(text string) (Model, tea.Cmd) {
 	m.turn++
 	m.state = turnRunning
 	m.spinner = 0
-	m.stream.Reset()
+	m.resetThoughtState()
 
 	cmds = append(cmds, m.submit(m.turn, text), m.ensureTick())
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) resetThoughtState() {
+	if m.stream != nil {
+		m.stream.Reset()
+	}
+	if m.thoughtBuf != nil {
+		m.thoughtBuf.Reset()
+	}
+	m.inThought = false
+	m.inOutOfBandThought = false
+	m.oobThoughtSep = false
+	m.thoughtStart = time.Time{}
+	m.thoughtEnd = time.Time{}
+	m.thoughtElapsed = 0
 }
 
 // finishTurn commits the accumulated response and drains one queued message.
@@ -1046,22 +1108,27 @@ func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 
 	var cmds []tea.Cmd
 	var lastThought string
-	if raw := strings.TrimSpace(m.stream.String()); raw != "" {
-		thought, answer := extractThought(raw)
-		if thought != "" {
-			entry := NewThinkingEntry(m.now(), thought)
-			entry.Elapsed = m.thinkingElapsed()
-			lastThought = thought
-			cmds = append(cmds, m.commit(entry))
-		}
-		if answer != "" {
-			cmds = append(cmds, m.commit(NewAgentEntry(m.now(), answer)))
+	var oobThought string
+	if m.thoughtBuf != nil {
+		oobThought = strings.TrimSpace(m.thoughtBuf.String())
+	}
+	var inlineThought, answer string
+	if m.stream != nil {
+		if raw := strings.TrimSpace(m.stream.String()); raw != "" {
+			inlineThought, answer = extractThought(raw)
 		}
 	}
-	m.stream.Reset()
-	m.inThought = false
-	m.thoughtStart = time.Time{}
-	m.thoughtEnd = time.Time{}
+	thought := joinNonEmptyThoughts(oobThought, inlineThought)
+	if thought != "" {
+		entry := NewThinkingEntry(m.now(), thought)
+		entry.Elapsed = m.thinkingElapsed()
+		lastThought = thought
+		cmds = append(cmds, m.commit(entry))
+	}
+	if answer != "" {
+		cmds = append(cmds, m.commit(NewAgentEntry(m.now(), answer)))
+	}
+	m.resetThoughtState()
 	if lastThought != "" {
 		m.lastThought = lastThought
 	}

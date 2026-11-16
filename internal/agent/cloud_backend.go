@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -709,7 +710,7 @@ func (b *CloudBackend) openOpenAIStream(ctx context.Context, reqBody map[string]
 			b.noStreamUsage.Store(true)
 			continue
 		}
-		if includeThinkingKwargs && rejectsRequestField(resp.StatusCode, respBytes, "chat_template_kwargs") {
+		if includeThinkingKwargs && (rejectsRequestField(resp.StatusCode, respBytes, "chat_template_kwargs") || rejectsRequestField(resp.StatusCode, respBytes, "enable_thinking")) {
 			b.noChatTemplateKwargs.Store(true)
 			continue
 		}
@@ -758,8 +759,15 @@ func newStreamIdleGuard(parent context.Context, timeout time.Duration) *streamId
 	}
 	if timeout > 0 {
 		g.timer = time.AfterFunc(timeout, func() {
-			g.expired.Store(true)
-			cancel()
+			g.mu.Lock()
+			stopped := g.stopped
+			if !stopped {
+				g.expired.Store(true)
+			}
+			g.mu.Unlock()
+			if !stopped {
+				cancel()
+			}
 		})
 	}
 	return g
@@ -790,7 +798,7 @@ func (g *streamIdleGuard) Close() {
 }
 
 func (g *streamIdleGuard) wrapErr(prefix string, parent context.Context, err error) error {
-	if g != nil && g.expired.Load() && (parent == nil || parent.Err() == nil) {
+	if g != nil && g.expired.Load() && errors.Is(err, context.Canceled) && (parent == nil || parent.Err() == nil) {
 		return fmt.Errorf("stream idle timeout after %s: %w", g.timeout, context.DeadlineExceeded)
 	}
 	return fmt.Errorf("%s: %w", prefix, err)
