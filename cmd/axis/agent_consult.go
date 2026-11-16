@@ -35,7 +35,7 @@ func consultResolver(
 	if build == nil {
 		build = agent.BuildBackend
 	}
-	return func(ctx context.Context, seatRef string) (agent.ChatBackend, string, error) {
+	return func(ctx context.Context, seatRef string) (agent.ChatBackend, string, func(), error) {
 		quoted := strings.TrimSpace(seatRef)
 		var choices []ModelChoice
 		if list != nil {
@@ -43,23 +43,45 @@ func consultResolver(
 		}
 		choice, err := findModelTargetByRef(choices, quoted)
 		if err != nil {
-			return nil, "", consultResolveError(quoted, err)
+			return nil, "", nil, consultResolveError(quoted, err)
 		}
-		opts, err := cloudOptsForTarget(loadRT, &choice)
+		// A catalog endpoint is the node's observed address and may not be
+		// reachable from here. Resolve a working route (listed address, node
+		// name, SSH tunnel) before building the seat. The tunnel is returned
+		// to the caller, which closes it when the consult ends. It never
+		// replaces the driver's tunnel.
+		var rt *runtimectx.Context
+		if loadRT != nil {
+			rt, _ = loadRT(ctx)
+		}
+		routed, tunnel, err := resolveModelRoute(ctx, rt, choice)
 		if err != nil {
-			return nil, "", consultDetail(quoted, err)
+			return nil, "", nil, consultDetail(quoted, err)
 		}
-		backend, err := build(choice, opts)
+		opts, err := cloudOptsForTarget(loadRT, &routed)
 		if err != nil {
-			return nil, "", consultDetail(quoted, err)
+			if tunnel != nil {
+				tunnel()
+			}
+			return nil, "", nil, consultDetail(quoted, err)
 		}
-		if backend == nil || strings.TrimSpace(choice.ID) == "" {
-			return nil, "", fmt.Errorf("consult: seat %q is not answering", quoted)
+		backend, err := build(routed, opts)
+		if err != nil {
+			if tunnel != nil {
+				tunnel()
+			}
+			return nil, "", nil, consultDetail(quoted, err)
+		}
+		if backend == nil || strings.TrimSpace(routed.ID) == "" {
+			if tunnel != nil {
+				tunnel()
+			}
+			return nil, "", nil, fmt.Errorf("consult: seat %q is not answering", quoted)
 		}
 		if c, ok := backend.(*chat.Client); ok {
 			c.DisableAutoStart()
 		}
-		return backend, choice.ID, nil
+		return backend, routed.ID, tunnel, nil
 	}
 }
 

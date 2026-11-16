@@ -226,6 +226,41 @@ func (b *blindSeat) ChatStream(ctx context.Context, msgs []chat.Message, tools [
 	return chat.Message{Role: chat.RoleAssistant, Content: "ran"}, nil
 }
 
+func TestSetConsultResolverRefreshesVisibleTools(t *testing.T) {
+	driver := &stubBackend{name: "driver", response: chat.Message{Role: chat.RoleAssistant, Content: "driver"}}
+	a := New(Config{Backend: driver, Model: "driver-model", Output: io.Discard})
+	if strings.Contains(visibleToolsText(a), consultModelTool) {
+		t.Fatal("New advertised consult_model before a resolver existed")
+	}
+	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return &blindSeat{}, "seat-a", nil, nil
+	})
+	if !strings.Contains(visibleToolsText(a), consultModelTool) {
+		t.Fatalf("visible tools message was not refreshed: %q", visibleToolsText(a))
+	}
+	found := false
+	for _, def := range a.tools.Defs() {
+		if def.Function.Name == consultModelTool {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("request tool definitions did not include consult_model after the resolver was installed")
+	}
+}
+
+func visibleToolsText(a *Agent) string {
+	if a == nil || a.conv == nil {
+		return ""
+	}
+	for _, m := range a.conv.Messages() {
+		if m.Role == chat.RoleSystem && strings.HasPrefix(m.Content, "Tools you may call right now:") {
+			return m.Content
+		}
+	}
+	return ""
+}
+
 func TestConsultModelIsVisibleOutsideCluster(t *testing.T) {
 	if toolVisible(consultModelTool, ScopeCluster) {
 		t.Fatal("consult_model is visible in cluster scope")

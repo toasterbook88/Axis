@@ -198,8 +198,8 @@ func TestBuildChildAgentHidesConsultModel(t *testing.T) {
 		Output:      io.Discard,
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
-	parent.SetConsultResolver(func(context.Context, string) (ChatBackend, string, error) {
-		return &blindSeat{}, "seat-a", nil
+	parent.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return &blindSeat{}, "seat-a", nil, nil
 	})
 	child := parent.buildChildAgent(1, "", "")
 	if child.tools == nil {

@@ -21,8 +21,8 @@ func TestConsultModelToolLeavesTheDriverInPlace(t *testing.T) {
 	driver := &stubBackend{name: "driver", response: chat.Message{Role: chat.RoleAssistant, Content: "driver"}}
 	seat := &consultRecorder{response: chat.Message{Role: chat.RoleAssistant, Content: "a short note"}}
 	a := New(Config{Backend: driver, Model: "driver-model", Output: io.Discard, Confirm: alwaysConfirm()})
-	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, error) {
-		return seat, "tool-note", nil
+	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return seat, "tool-note", nil, nil
 	})
 
 	got, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
@@ -54,18 +54,18 @@ func TestConsultModelToolLeavesTheDriverInPlace(t *testing.T) {
 func TestConsultModelToolReportsSeatErrors(t *testing.T) {
 	driver := &stubBackend{name: "driver", response: chat.Message{Role: chat.RoleAssistant, Content: "driver"}}
 	a := New(Config{Backend: driver, Model: "driver-model", Output: io.Discard, Confirm: alwaysConfirm()})
-	a.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, error) {
+	a.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, func(), error) {
 		switch ref {
 		case "tool-down":
-			return &consultRecorder{err: errors.New("connection refused")}, "tool-down", nil
+			return &consultRecorder{err: errors.New("connection refused")}, "tool-down", nil, nil
 		case "tool-hide":
-			return &consultRecorder{err: errors.New("ollama pull tool-hide")}, "tool-hide", nil
+			return &consultRecorder{err: errors.New("ollama pull tool-hide")}, "tool-hide", nil, nil
 		case "tool-quiet":
-			return &consultRecorder{err: errors.New("could not start ollama serve")}, "tool-quiet", nil
+			return &consultRecorder{err: errors.New("could not start ollama serve")}, "tool-quiet", nil, nil
 		case "tool-blank":
-			return &consultRecorder{response: chat.Message{Role: chat.RoleAssistant, Content: " \n"}}, "tool-blank", nil
+			return &consultRecorder{response: chat.Message{Role: chat.RoleAssistant, Content: " \n"}}, "tool-blank", nil, nil
 		default:
-			return nil, "", fmt.Errorf("consult: seat %q is not answering", ref)
+			return nil, "", nil, fmt.Errorf("consult: seat %q is not answering", ref)
 		}
 	})
 
@@ -107,16 +107,34 @@ func TestConsultModelToolReportsSeatErrors(t *testing.T) {
 	}
 }
 
+func TestConsultModelClosesResolverCleanup(t *testing.T) {
+	driver := &stubBackend{name: "driver", response: chat.Message{Role: chat.RoleAssistant, Content: "driver"}}
+	seat := &consultRecorder{response: chat.Message{Role: chat.RoleAssistant, Content: "a note"}}
+	a := New(Config{Backend: driver, Model: "driver-model", Output: io.Discard, Confirm: alwaysConfirm()})
+	closed := 0
+	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return seat, "seat-cleanup", func() { closed++ }, nil
+	})
+	if _, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: consultModelTool, Arguments: consultToolArgs("seat-cleanup", "hello")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if closed != 1 {
+		t.Fatalf("resolver cleanup calls = %d, want 1", closed)
+	}
+}
+
 func TestConsultModelSameResolvedIDIsSingleSlot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
-		r.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, error) {
+		r.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, func(), error) {
 			switch ref {
 			case "alias-a", "seat-a":
-				return seat, "resolved-shared", nil
+				return seat, "resolved-shared", nil, nil
 			default:
-				return nil, "", fmt.Errorf("consult: seat %q is not answering", ref)
+				return nil, "", nil, fmt.Errorf("consult: seat %q is not answering", ref)
 			}
 		})
 		go r.Execute(context.Background(), consultModelTool, consultToolArgs("alias-a", "one"))
@@ -135,14 +153,14 @@ func TestConsultModelDifferentResolvedIDsMayOverlap(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
-		r.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, error) {
+		r.SetConsultResolver(func(_ context.Context, ref string) (ChatBackend, string, func(), error) {
 			switch ref {
 			case "seat-a":
-				return seat, "resolved-a", nil
+				return seat, "resolved-a", nil, nil
 			case "seat-b":
-				return seat, "resolved-b", nil
+				return seat, "resolved-b", nil, nil
 			default:
-				return nil, "", fmt.Errorf("consult: seat %q is not answering", ref)
+				return nil, "", nil, fmt.Errorf("consult: seat %q is not answering", ref)
 			}
 		})
 		go r.Execute(context.Background(), consultModelTool, consultToolArgs("seat-a", "one"))
@@ -165,9 +183,9 @@ func TestConsultModelClusterDispatchDoesNotRunTheSeat(t *testing.T) {
 		Backend: driver, Model: "driver-model", Output: io.Discard,
 		Confirm: alwaysConfirm(), Autonomy: AutonomyCluster,
 	})
-	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, error) {
+	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
 		resolved++
-		return seat, "seat-a", nil
+		return seat, "seat-a", nil, nil
 	})
 	_, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
 		Function: chat.ToolCallFunction{Name: consultModelTool, Arguments: consultToolArgs("seat-a", "hello")},
@@ -207,8 +225,8 @@ func TestConsultModelSessionAlwaysSkipsLaterConfirms(t *testing.T) {
 		Backend: driver, Model: "driver-model", Output: io.Discard,
 		Confirm: rc.confirm, Autonomy: AutonomyEdit,
 	})
-	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, error) {
-		return seat, "tool-always", nil
+	a.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return seat, "tool-always", nil, nil
 	})
 	args := string(consultToolArgs("seat-a", "hello"))
 	dispatch(t, a, consultModelTool, args)

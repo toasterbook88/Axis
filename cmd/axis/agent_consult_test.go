@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -9,7 +10,12 @@ import (
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
+
+// errTestBuild is a build failure the route tests use.
+var errTestBuild = errors.New("seat build failed")
 
 // consultCountBackend counts ChatStream calls. The resolver test uses it as
 // the driver and never as a live seat.
@@ -49,9 +55,12 @@ func TestConsultResolverDisablesOllamaAutoStart(t *testing.T) {
 	resolver := consultResolver(func(context.Context) []ModelChoice {
 		return []ModelChoice{choice}
 	}, nil, agent.BuildBackend)
-	backend, id, err := resolver(context.Background(), "seat-a")
+	backend, id, cleanup, err := resolver(context.Background(), "seat-a")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cleanup != nil {
+		t.Fatal("a loopback seat opened a cleanup")
 	}
 	if id != choice.ID {
 		t.Fatalf("id = %q", id)
@@ -65,6 +74,140 @@ func TestConsultResolverDisablesOllamaAutoStart(t *testing.T) {
 	}
 	if !chat.NewClient(choice.Endpoint, "driver-model").AutoStartEnabled() {
 		t.Fatal("the driver client lost auto-start")
+	}
+}
+
+func TestConsultResolverRoutesRemoteSeatByName(t *testing.T) {
+	origProbe := routeProbeFn
+	defer func() { routeProbeFn = origProbe }()
+	routeProbeFn = func(url string) bool { return strings.HasPrefix(url, "http://lab-5:11434/") }
+
+	choice := ModelChoice{
+		ID: "local:lab-5:seat-a", Model: "seat-a", Protocol: agent.ProtocolOllama,
+		ProviderKind: "local", Node: "lab-5", Port: 11434,
+		Endpoint: "http://192.0.2.10:11434",
+	}
+	loadRT := func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{Config: &config.Config{Nodes: []config.NodeConfig{{Name: "lab-5"}}}}, nil
+	}
+	var endpoint string
+	resolver := consultResolver(func(context.Context) []ModelChoice {
+		return []ModelChoice{choice}
+	}, loadRT, func(target agent.ModelTarget, _ agent.CloudBackendOptions) (agent.ChatBackend, error) {
+		endpoint = target.Endpoint
+		return &consultCountBackend{text: "seat"}, nil
+	})
+
+	_, _, cleanup, err := resolver(context.Background(), "seat-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanup != nil {
+		t.Fatal("a direct route must not open a tunnel")
+	}
+	if endpoint != "http://lab-5:11434" {
+		t.Fatalf("endpoint = %q, want the node-name route", endpoint)
+	}
+}
+
+func TestConsultResolverTunnelsRemoteSeatAndHandsCleanupToCaller(t *testing.T) {
+	origProbe := routeProbeFn
+	origTunnel := openModelTunnelFn
+	defer func() {
+		routeProbeFn = origProbe
+		openModelTunnelFn = origTunnel
+	}()
+	routeProbeFn = func(url string) bool { return strings.HasPrefix(url, "http://127.0.0.1:34567/") }
+	closed := 0
+	openModelTunnelFn = func(context.Context, config.NodeConfig, int) (int, func(), error) {
+		return 34567, func() { closed++ }, nil
+	}
+	// A driver tunnel must survive the consult: installing one here would call
+	// the previous close func and replace it.
+	activeModelTunnel.mu.Lock()
+	previousClose := activeModelTunnel.close
+	replaced := 0
+	activeModelTunnel.close = func() { replaced++ }
+	activeModelTunnel.mu.Unlock()
+	defer func() {
+		activeModelTunnel.mu.Lock()
+		activeModelTunnel.close = previousClose
+		activeModelTunnel.mu.Unlock()
+	}()
+
+	choice := ModelChoice{
+		ID: "local:lab-5:seat-a", Model: "seat-a", Protocol: agent.ProtocolOllama,
+		ProviderKind: "local", Node: "lab-5", Port: 11434,
+		Endpoint: "http://192.0.2.10:11434",
+	}
+	loadRT := func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{Config: &config.Config{Nodes: []config.NodeConfig{{Name: "lab-5"}}}}, nil
+	}
+	var endpoint string
+	resolver := consultResolver(func(context.Context) []ModelChoice {
+		return []ModelChoice{choice}
+	}, loadRT, func(target agent.ModelTarget, _ agent.CloudBackendOptions) (agent.ChatBackend, error) {
+		endpoint = target.Endpoint
+		return &consultCountBackend{text: "seat"}, nil
+	})
+
+	_, _, cleanup, err := resolver(context.Background(), "seat-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "http://127.0.0.1:34567" {
+		t.Fatalf("endpoint = %q, want the tunnel route", endpoint)
+	}
+	if cleanup == nil {
+		t.Fatal("an SSH route must hand a cleanup to the caller")
+	}
+	if closed != 0 {
+		t.Fatalf("tunnel closed before the consult ran: %d", closed)
+	}
+	if replaced != 0 {
+		t.Fatal("consult replaced the driver's tunnel")
+	}
+	cleanup()
+	if closed != 1 {
+		t.Fatalf("tunnel close calls = %d, want 1", closed)
+	}
+}
+
+func TestConsultResolverClosesTunnelWhenBuildFails(t *testing.T) {
+	origProbe := routeProbeFn
+	origTunnel := openModelTunnelFn
+	defer func() {
+		routeProbeFn = origProbe
+		openModelTunnelFn = origTunnel
+	}()
+	routeProbeFn = func(url string) bool { return strings.HasPrefix(url, "http://127.0.0.1:34567/") }
+	closed := 0
+	openModelTunnelFn = func(context.Context, config.NodeConfig, int) (int, func(), error) {
+		return 34567, func() { closed++ }, nil
+	}
+	choice := ModelChoice{
+		ID: "local:lab-5:seat-a", Model: "seat-a", Protocol: agent.ProtocolOllama,
+		ProviderKind: "local", Node: "lab-5", Port: 11434,
+		Endpoint: "http://192.0.2.10:11434",
+	}
+	loadRT := func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{Config: &config.Config{Nodes: []config.NodeConfig{{Name: "lab-5"}}}}, nil
+	}
+	resolver := consultResolver(func(context.Context) []ModelChoice {
+		return []ModelChoice{choice}
+	}, loadRT, func(agent.ModelTarget, agent.CloudBackendOptions) (agent.ChatBackend, error) {
+		return nil, errTestBuild
+	})
+
+	_, _, cleanup, err := resolver(context.Background(), "seat-a")
+	if err == nil {
+		t.Fatal("expected a build error")
+	}
+	if cleanup != nil {
+		t.Fatal("a failed build must not hand a cleanup to the caller")
+	}
+	if closed != 1 {
+		t.Fatalf("tunnel close calls = %d, want 1", closed)
 	}
 }
 
@@ -129,11 +272,11 @@ func TestConsultRealResolverUnknownSeat(t *testing.T) {
 			built.Add(1)
 			return &consultCountBackend{text: target.ID}, nil
 		})
-		_, idByID, err := resolver(context.Background(), "local:seat-a")
+		_, idByID, _, err := resolver(context.Background(), "local:seat-a")
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, idByName, err := resolver(context.Background(), "seat-a")
+		_, idByName, _, err := resolver(context.Background(), "seat-a")
 		if err != nil {
 			t.Fatal(err)
 		}

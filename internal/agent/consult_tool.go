@@ -12,10 +12,11 @@ import (
 // low risk.
 const consultModelTool = "consult_model"
 
-// ConsultResolver turns a seat reference into a backend and the slot key.
-// The slot key is the resolved model choice id. A nil resolver means the
-// tool cannot reach a seat.
-type ConsultResolver func(ctx context.Context, seatRef string) (seat ChatBackend, slotID string, err error)
+// ConsultResolver turns a seat reference into a backend, the slot key, and an
+// optional cleanup for resources the lookup opened (such as an SSH tunnel).
+// The slot key is the resolved model choice id. A nil resolver means the tool
+// cannot reach a seat.
+type ConsultResolver func(ctx context.Context, seatRef string) (seat ChatBackend, slotID string, cleanup func(), err error)
 
 // SetConsultResolver installs the seat resolver. The agent command supplies
 // the resolver that knows the configured model list. consult itself stays
@@ -27,12 +28,17 @@ func (r *ToolRegistry) SetConsultResolver(fn ConsultResolver) {
 	r.consultResolver = fn
 }
 
-// SetConsultResolver installs the seat resolver on the agent's tool registry.
+// SetConsultResolver installs the seat resolver on the agent's tool registry
+// and refreshes the stored visible-tool message, so the system prompt and the
+// request tool definitions never disagree about the tool.
 func (a *Agent) SetConsultResolver(fn ConsultResolver) {
 	if a == nil || a.tools == nil {
 		return
 	}
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
 	a.tools.SetConsultResolver(fn)
+	a.refreshVisibleTools()
 }
 
 // consultAsksOperator reports the tool that must reach the operator even
@@ -68,7 +74,10 @@ func (r *ToolRegistry) execConsultModel(ctx context.Context, args json.RawMessag
 	if r == nil || r.consultResolver == nil {
 		return "", fmt.Errorf("consult: seat %q is not answering", seatRef)
 	}
-	backend, slotID, err := r.consultResolver(ctx, seatRef)
+	backend, slotID, cleanup, err := r.consultResolver(ctx, seatRef)
+	if cleanup != nil {
+		defer cleanup()
+	}
 	if err != nil {
 		return "", err
 	}
