@@ -196,6 +196,27 @@ func TestConsultCancelledCallDoesNotReachTheSeat(t *testing.T) {
 	}
 }
 
+func TestQueuedConsultHonorsCancellation(t *testing.T) {
+	// Hold the slot so a second consult must wait. A cancelled waiter has to
+	// return without taking the token or reaching the seat.
+	release, err := acquireConsultSlot(context.Background(), "seat-queued")
+	if err != nil {
+		t.Fatalf("acquire holder slot: %v", err)
+	}
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	seat := &blindSeat{}
+	_, err = consult(ctx, seat, consultRequest{SeatID: "seat-queued", Prompt: "queued", SingleSlot: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued consult err = %v, want context.Canceled", err)
+	}
+	if seat.calls != 0 {
+		t.Fatalf("queued consult reached the seat %d times", seat.calls)
+	}
+}
+
 type blindSeat struct {
 	calls int
 }

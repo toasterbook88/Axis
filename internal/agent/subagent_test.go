@@ -192,6 +192,24 @@ func TestSpawnSubagentChildHasBackgroundTaskStore(t *testing.T) {
 	}
 }
 
+func TestBuildChildAgentHidesConsultModel(t *testing.T) {
+	parent := New(Config{
+		Backend:     &subAgentBackend{answer: "done"},
+		Output:      io.Discard,
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	parent.SetConsultResolver(func(context.Context, string) (ChatBackend, string, error) {
+		return &blindSeat{}, "seat-a", nil
+	})
+	child := parent.buildChildAgent(1, "", "")
+	if child.tools == nil {
+		t.Fatal("child has no tool registry")
+	}
+	if containsName(defNames(child.tools), consultModelTool) {
+		t.Fatal("child advertised consult_model without a resolver")
+	}
+}
+
 func TestBuildChildAgentInheritsDryRunAndEvidenceFlags(t *testing.T) {
 	parent := New(Config{
 		Backend:                 &subAgentBackend{answer: "done"},

@@ -145,6 +145,12 @@ func (r *ToolRegistry) visible(name string) bool {
 	if name == "" || neverTool(name) || name == "axis_summary" {
 		return false
 	}
+	// A registry with no resolver cannot reach a seat. Advertise the tool
+	// only where the command wired one, so a child or library caller never
+	// sees a tool whose every call would fail.
+	if name == consultModelTool && r.consultResolver == nil {
+		return false
+	}
 	if execTool(name) && r.scope != ScopeExec {
 		return false
 	}

@@ -26,7 +26,7 @@ var (
 	consultSlots   = map[string]chan struct{}{}
 )
 
-func acquireConsultSlot(seat string) func() {
+func acquireConsultSlot(ctx context.Context, seat string) (func(), error) {
 	consultSlotsMu.Lock()
 	token := consultSlots[seat]
 	if token == nil {
@@ -35,8 +35,14 @@ func acquireConsultSlot(seat string) func() {
 		consultSlots[seat] = token
 	}
 	consultSlotsMu.Unlock()
-	<-token
-	return func() { token <- struct{}{} }
+	select {
+	case <-token:
+		return func() { token <- struct{}{} }, nil
+	case <-ctx.Done():
+		// The slot stays with its holder. A cancelled waiter returns
+		// without touching the token, so the next call can take it.
+		return func() {}, ctx.Err()
+	}
 }
 
 // consult asks seat to answer Prompt. It does not take the agent, so it
@@ -47,7 +53,10 @@ func consult(ctx context.Context, seat ChatBackend, req consultRequest) (string,
 		return "", fmt.Errorf("consult: seat %q is not answering", req.SeatID)
 	}
 	if req.SingleSlot {
-		unlock := acquireConsultSlot(req.SeatID)
+		unlock, err := acquireConsultSlot(ctx, req.SeatID)
+		if err != nil {
+			return "", err
+		}
 		defer unlock()
 	}
 	if err := ctx.Err(); err != nil {

@@ -43,7 +43,7 @@ func consultAsksOperator(name string) bool {
 
 func (r *ToolRegistry) registerConsultModel() {
 	r.add(consultModelTool,
-		"Ask one configured model, other than the current one, for text. seat is a model id or model name from the same list as /model. prompt is the question. The seat does not receive tools, and the current model stays in place.",
+		"Ask one configured model for text. seat is a model id or model name from the same list as /model. prompt is the question. The seat does not receive tools, and the current model stays in place.",
 		json.RawMessage(`{"type":"object","properties":{"seat":{"type":"string","description":"Model id or model name from the configured choice list"},"prompt":{"type":"string","description":"The question to send to that model"}},"required":["seat","prompt"]}`),
 		r.execConsultModel,
 	)
