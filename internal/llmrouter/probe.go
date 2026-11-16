@@ -21,20 +21,20 @@ const (
 
 // BackendProbe is the result of probing a configured AI backend.
 type BackendProbe struct {
-	Backend   string        `json:"backend" yaml:"backend"`
-	Kind      string        `json:"kind" yaml:"kind"`
-	BaseURL   string        `json:"base_url" yaml:"base_url"`
-	ProbedURL string        `json:"probed_url,omitempty" yaml:"probed_url,omitempty"`
-	OK        bool          `json:"ok" yaml:"ok"`
+	Backend   string `json:"backend" yaml:"backend"`
+	Kind      string `json:"kind" yaml:"kind"`
+	BaseURL   string `json:"base_url" yaml:"base_url"`
+	ProbedURL string `json:"probed_url,omitempty" yaml:"probed_url,omitempty"`
+	OK        bool   `json:"ok" yaml:"ok"`
 	// Skipped is true when this backend was not probed because the caller's
 	// overall context was already done. OK is false and Message explains why;
 	// callers must not treat Skipped as an observed backend failure.
-	Skipped   bool          `json:"skipped,omitempty" yaml:"skipped,omitempty"`
-	Latency   time.Duration `json:"latency" yaml:"latency"`
-	Message   string        `json:"message,omitempty" yaml:"message,omitempty"`
-	Models    []string      `json:"models,omitempty" yaml:"models,omitempty"`
-	Node      string        `json:"node,omitempty" yaml:"node,omitempty"`
-	Enabled   bool          `json:"enabled" yaml:"enabled"`
+	Skipped bool          `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+	Latency time.Duration `json:"latency" yaml:"latency"`
+	Message string        `json:"message,omitempty" yaml:"message,omitempty"`
+	Models  []string      `json:"models,omitempty" yaml:"models,omitempty"`
+	Node    string        `json:"node,omitempty" yaml:"node,omitempty"`
+	Enabled bool          `json:"enabled" yaml:"enabled"`
 }
 
 // ProbeBackend checks reachability and lists models when possible.
