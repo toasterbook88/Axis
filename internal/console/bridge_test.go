@@ -467,4 +467,33 @@ func TestStreamWriterWriteThoughtWrapsAndClosesThinkTags(t *testing.T) {
 	if raw2.String() != "<think>only thinking</think>" {
 		t.Fatalf("raw2 = %q, want %q", raw2.String(), "<think>only thinking</think>")
 	}
+
+	// Multi-round turn on the same writer: reasoning -> tool boundary (CloseThought) ->
+	// second reasoning span -> final answer. Both reasoning spans must land in thought
+	// and never leak into answer.
+	rec3 := &concurrentSender{}
+	w3 := NewStreamWriter(rec3, 3)
+	tw3 := w3.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	tw3.WriteThought("Plan a tool call")
+	tw3.CloseThought()
+	tw3.WriteThought("Interpret the result")
+	if _, err := w3.Write([]byte("Final answer")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	if err := w3.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	var raw3 strings.Builder
+	for _, msg := range rec3.msgs {
+		if chunk, ok := msg.(StreamChunkMsg); ok {
+			raw3.WriteString(chunk.Text)
+		}
+	}
+	t3, a3 := extractThought(raw3.String())
+	if t3 != "Plan a tool call\n\nInterpret the result" || a3 != "Final answer" {
+		t.Fatalf("multi-round extractThought(%q) = (%q, %q), want (%q, %q)", raw3.String(), t3, a3, "Plan a tool call\n\nInterpret the result", "Final answer")
+	}
 }
