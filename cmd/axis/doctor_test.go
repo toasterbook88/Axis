@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -12,7 +14,9 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -668,5 +672,131 @@ func TestDoctorRefusedProxyDirectiveGetsItsOwnFix(t *testing.T) {
 	stdout = stripANSI(stdout)
 	if !strings.Contains(stdout, "ProxyJump none") || strings.Contains(stdout, "verify pubkey auth, known_hosts") {
 		t.Fatalf("refused node should get the directive fix, not the known_hosts hint:\n%s", stdout)
+	}
+}
+
+func TestDoctorProbesHTTPMCPServer(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Test-Header"); got != "yes" {
+			http.Error(w, "missing header", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed) // streamable HTTP MCP GET behavior
+	}))
+	defer okSrv.Close()
+
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer badSrv.Close()
+
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes:                []config.NodeConfig{{Name: "n", Hostname: "127.0.0.1", SSHUser: "axis"}},
+			AllowedInternalHosts: []string{"127.0.0.1"},
+			MCPServers: map[string]config.MCPServerConfig{
+				"good-mcp": {
+					Transport: "http",
+					URL:       okSrv.URL + "/mcp",
+					Headers:   map[string]string{"X-Test-Header": "yes"},
+				},
+				"bad-mcp": {
+					Transport: "http",
+					URL:       badSrv.URL + "/mcp",
+				},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("warning-only MCP HTTP failure must still exit 0, got: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, `MCP Server "good-mcp" URL`) || !strings.Contains(out, "HTTP 405") {
+		t.Fatalf("expected good-mcp HTTP 405 pass, got:\n%s", out)
+	}
+	if !strings.Contains(out, `MCP Server "bad-mcp" URL`) || !strings.Contains(out, "HTTP 502") || !strings.Contains(out, "advisory warnings") {
+		t.Fatalf("expected bad-mcp HTTP 502 warning, got:\n%s", out)
+	}
+}
+
+func TestDoctorWarnsDisallowedInternalHTTPMCPServer(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	restore := minimalDoctorStubs(t)
+	defer restore()
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{{Name: "n", Hostname: "127.0.0.1", SSHUser: "axis"}},
+			MCPServers: map[string]config.MCPServerConfig{
+				"blocked-mcp": {
+					Transport: "http",
+					URL:       "http://127.0.0.1:9999/mcp",
+				},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("expected exit 0 advisory warning, got: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "disallowed internal address") {
+		t.Fatalf("expected SSRF allowlist warning, got:\n%s", out)
+	}
+}
+
+func TestDoctorChecksConfiguredAIBackends(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	prevAI := doctorProbeAIBackends
+	doctorProbeAIBackends = func(context.Context, *config.Config) ([]llmrouter.BackendProbe, error) {
+		return []llmrouter.BackendProbe{
+			{
+				Backend:   "hub-main",
+				Enabled:   true,
+				OK:        true,
+				ProbedURL: "https://models.example.com/v1/models",
+				Message:   "2 model(s)",
+			},
+			{
+				Backend:   "hub-down",
+				Enabled:   true,
+				OK:        false,
+				ProbedURL: "https://down.example.com/v1/models",
+				Message:   "HTTP 502",
+			},
+		}, nil
+	}
+	t.Cleanup(func() { doctorProbeAIBackends = prevAI })
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("expected exit 0 advisory warning, got: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "AI Config: hub-main") || !strings.Contains(out, "2 model(s)") {
+		t.Fatalf("expected hub-main pass check, got:\n%s", out)
+	}
+	if !strings.Contains(out, "AI Config: hub-down") || !strings.Contains(out, "HTTP 502") {
+		t.Fatalf("expected hub-down warn check, got:\n%s", out)
 	}
 }
