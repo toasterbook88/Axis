@@ -8,6 +8,11 @@ desk leases fail closed, and A2A refuses synthesized terminal reports.
 * `axis version` compares the daemon and CLI commits by prefix, so a release
   binary's seven-character short commit and a local build's eight-character one
   no longer produce a false "differs" warning for the same revision (#641).
+* `ProbeAllBackendsForNodes` gives each backend its own probe timeout and marks
+  backends `Skipped` when the caller's overall budget is already spent, so a
+  slow earlier backend cannot cancel later probes or look like an observed
+  failure. `axis doctor` AI Config rows for skipped backends warn without a
+  repair Fix.
 * Tool version parsing no longer keeps a trailing `)` or a distro package
   suffix when a clean version is also on the line. `gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
   now reports `11.4.0`, not `11.4.0-1ubuntu1~22.04)`.
