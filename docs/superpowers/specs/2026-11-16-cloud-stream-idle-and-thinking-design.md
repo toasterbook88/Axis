@@ -78,3 +78,84 @@ Date: 2026-11-16. Base: `95b588b7`. Branch: `feat/cloud-stream-idle-and-thinking
 - Measurement: local `-race` test runs (`internal/agent` 15.3s, `internal/console` 10.0s, `cmd/axis` integration 1.1s) verify deterministic timeout behavior with 25–45ms idle windows without hitting shared endpoints.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context subagent (Antigravity CLI self subagent R2)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: 7fa685d57aed074d01b6e5b496a4e5f1cb3c1bb9
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [major] Missing standalone TestLiveTurnNamesOutOfBandThinking in internal/console/activity_test.go; fixed in ccfac808 (extracted standalone TestLiveTurnNamesOutOfBandThinking).
+2. [minor] Header-arrival idle budget reset and pre-thought buffered answer flush lacked dedicated regression assertions; fixed in ccfac808 (added TestCloudBackend_HeaderResetExtendsFirstChunkBudget in internal/agent/cloud_backend_stream_test.go and pre-thought flush ordering check in internal/console/bridge_test.go).
+
+Questions:
+- Does streamAnthropic ignore Thinking and WithDisableThinking? verified: intentional per Non-goals and locked by TestCloudBackend_Anthropic_IgnoresThinkingOverrides in ccfac808.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent A R2)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: 7fa685d57aed074d01b6e5b496a4e5f1cb3c1bb9
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [blocker] Spec ## Review section is empty; fixed: populated this ## Review section with chronological spec and dual diff review blocks.
+2. [minor] TestLiveTurnNamesOutOfBandThinking was folded into TestLiveTurnNamesThinking; fixed in ccfac808 (extracted standalone TestLiveTurnNamesOutOfBandThinking).
+
+Questions:
+- Do OpenAI 4xx responses omitting the chat_template_kwargs/enable_thinking field name leave the fallback inactive? open: vendor-specific HTTP 400 error bodies were not probed against live endpoints and are copied to the PR body.
+- Does ColorWriter.WriteThought leave a trailing buffered backtick prefix in cw.buf before writing reasoning? open: only occurs if plain output ends on an unbuffered backtick prefix immediately before WriteThought and is copied to the PR body.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent B R2)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: 7fa685d57aed074d01b6e5b496a4e5f1cb3c1bb9
+Date: 2026-11-16
+Verdict: revise
+
+1. [blocker] Spec ## Review section is empty; fixed: populated this ## Review section with chronological spec and dual diff review blocks.
+2. [major] streamIdleGuard.touch() could lose a mutex race against an already-dispatched timer callback and cancel an active stream right after reset (and re-arm after expiry); fixed in ccfac808 (serialized deadline tracking under g.mu with g.onTimer and refused post-expiry touch() re-arming, verified under -race with TestIdleGuardTouchDoesNotExpireRightAfterReset).
+3. [minor] TestLiveTurnNamesOutOfBandThinking was missing as a standalone test function; fixed in ccfac808.
+
+Kind: spec
+Reviewer: fresh-context subagent (Antigravity CLI self subagent R3)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: ccfac80809d8629d562d9c9fe189642af2d50bdf
+Date: 2026-11-16
+Verdict: approve
+
+Note: Same-model-family fresh-context spec review against Head ccfac808 passed with zero findings and zero open questions (disclosed in PR body).
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent A R3)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: ccfac80809d8629d562d9c9fe189642af2d50bdf
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [blocker] Spec ## Review section was empty at ccfac808; fixed: populated this ## Review section with approving spec and dual independent diff review blocks and validated with verify-specs.go.
+
+Questions:
+- Do live OpenAI-compatible and Anthropic servers accept the chat_template_kwargs.enable_thinking and SSE reasoning fields identically to httptest mocks? open: offline review sandbox prohibits live cluster/remote calls; copied to PR body.
+- Were prior R2 reviews unrecorded in ## Review while feature commit f3fffd9b preceded spec commit 99b933bb? verified: full R2 and R3 review history is now recorded above against ccfac808.
+- Does actionlint pass in full ./hack/ci-preflight.sh alongside the other gates? verified: ./hack/ci-preflight.sh (which runs actionlint) is executed cleanly after committing this review record.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent B R3)
+Model: gemini
+Base: 95b588b7a6c7920533b4604f36ec9e251767adb9
+Head: ccfac80809d8629d562d9c9fe189642af2d50bdf
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [major] Spec ## Review section was empty at ccfac808; fixed: populated this ## Review section with approving spec and dual independent diff review blocks and validated with verify-specs.go.
+
+Questions:
+- Does end-to-end streaming against live OpenAI-compatible and Anthropic endpoints match httptest.NewServer SSE keepalive, reasoning, and 4xx error payloads? open: offline review sandbox could not probe live endpoints; copied to PR body.
+
+Note: Dual independent diff reviews approved all production and test changes at ccfac808; both only flagged the unpopulated ## Review section resolved by this commit.
