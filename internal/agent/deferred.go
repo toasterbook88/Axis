@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -278,12 +279,10 @@ func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerA
 		return joinToolSearchSections("", baseNotes, capBytes)
 	}
 
-	lines := make([]string, len(matched))
 	validEntries := make([]ToolCatalogEntry, 0, len(matched))
 	validLines := make([]string, 0, len(matched))
-	for i, entry := range matched {
+	for _, entry := range matched {
 		if line, ok := marshalToolSearchLine(entry, r.mcpServers[entry.Def.Function.Name], 0, 0); ok {
-			lines[i] = line
 			validEntries = append(validEntries, entry)
 			validLines = append(validLines, line)
 		}
@@ -293,7 +292,7 @@ func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerA
 	}
 
 	fullBlock := wrapFunctionsBlock(validLines)
-	if capBytes <= 0 || len(fullBlock)+notesSectionLen(baseNotes, true) <= capBytes {
+	if capBytes <= 0 || len(fullBlock) <= capBytes {
 		if page <= 1 {
 			return joinToolSearchSections(fullBlock, baseNotes, capBytes)
 		}
@@ -301,27 +300,11 @@ func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerA
 		return joinToolSearchSections(notice, baseNotes, capBytes)
 	}
 
-	firstBlock := wrapFunctionsBlock([]string{validLines[0]})
-	notesCap := max(256, capBytes/4)
-	boundedNotes := fitToolSearchNotes(baseNotes, notesCap)
-	if len(fullBlock)+notesSectionLen(boundedNotes, true) <= capBytes {
-		if page <= 1 {
-			return joinToolSearchSections(fullBlock, boundedNotes, capBytes)
-		}
-		notice := fmt.Sprintf("All %d matched schema(s) fit on page 1 (requested page %d has no further results).", len(validEntries), page)
-		return joinToolSearchSections(notice, boundedNotes, capBytes)
+	if len(validEntries) == 1 {
+		return formatOversizedToolSchema(validEntries[0], r.mcpServers[validEntries[0].Def.Function.Name], validLines[0], page, baseNotes, capBytes)
 	}
 
-	if len(validEntries) == 1 || len(firstBlock)+oversizedSingleOverhead(validEntries[0].Def.Function.Name)+notesSectionLen(boundedNotes, true) > capBytes {
-		extraNotes := append([]string(nil), boundedNotes...)
-		if len(validEntries) > 1 {
-			omitted := formatToolListNotice("Omitted due to output size limit (narrow with select:<name>): ", catalogEntryNames(validEntries[1:]), min(256, notesCap))
-			extraNotes = append([]string{omitted}, extraNotes...)
-		}
-		return formatOversizedToolSchema(validEntries[0], r.mcpServers[validEntries[0].Def.Function.Name], validLines[0], page, extraNotes, capBytes)
-	}
-
-	return formatPaginatedToolList(validEntries, validLines, page, boundedNotes, capBytes)
+	return formatPaginatedToolList(validEntries, validLines, page, baseNotes, capBytes)
 }
 
 func buildToolSearchNotes(eagerAlready, missing, ambiguous, truncated []string) []string {
@@ -363,25 +346,6 @@ func marshalToolSearchLine(entry ToolCatalogEntry, server string, schemaPage, sc
 
 func wrapFunctionsBlock(lines []string) string {
 	return "<functions>\n" + strings.Join(lines, "\n") + "\n</functions>"
-}
-
-func catalogEntryNames(entries []ToolCatalogEntry) []string {
-	out := make([]string, len(entries))
-	for i, e := range entries {
-		out[i] = e.Def.Function.Name
-	}
-	return out
-}
-
-func notesSectionLen(notes []string, withPrimary bool) int {
-	if len(notes) == 0 {
-		return 0
-	}
-	n := len(strings.Join(notes, "\n\n"))
-	if withPrimary {
-		n += 2
-	}
-	return n
 }
 
 func fitToolSearchNotes(notes []string, budget int) []string {
@@ -533,12 +497,8 @@ func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page in
 		oversizedIdx int
 	}
 	const footerReserve = 240
-	notesCost := notesSectionLen(baseNotes, true)
-	bodyBudget := capBytes - footerReserve - notesCost
-	if bodyBudget < 512 {
-		baseNotes = nil
-		bodyBudget = max(256, capBytes-footerReserve)
-	}
+	// Query-specific notes fit after the mandatory footer, never changing pages.
+	bodyBudget := max(256, capBytes-footerReserve)
 
 	var pages []pageSlice
 	var cur []int
@@ -611,10 +571,6 @@ func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page in
 	return joinToolSearchSections(primary, notes, capBytes)
 }
 
-func oversizedSingleOverhead(name string) int {
-	return len(fmt.Sprintf("Schema page 99/99 for %s. Call tool_search(query=\"select:%s\", page=99) for remaining properties before calling tool_call.", name, name)) + 4
-}
-
 func formatOversizedToolSchema(entry ToolCatalogEntry, server, fullLine string, page int, extraNotes []string, capBytes int) string {
 	if out, ok := trySplitToolSchemaProperties(entry, server, page, extraNotes, capBytes); ok {
 		return out
@@ -624,7 +580,9 @@ func formatOversizedToolSchema(entry ToolCatalogEntry, server, fullLine string, 
 
 func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page int, extraNotes []string, capBytes int) (string, bool) {
 	var rawSchema map[string]any
-	if err := json.Unmarshal(normalizeRawParams(entry.Def.Function.Parameters), &rawSchema); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(normalizeRawParams(entry.Def.Function.Parameters)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&rawSchema); err != nil {
 		return "", false
 	}
 	rawProps, ok := rawSchema["properties"].(map[string]any)
@@ -663,13 +621,9 @@ func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page in
 	maxDigits := max(99, len(propKeys))
 	// Use p < total so worstFooter reserves the non-final continuation hint bytes.
 	worstFooter := buildFooter(maxDigits-1, maxDigits)
-	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/3))
-	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
-	bodyBudget := capBytes - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
-	if bodyBudget < 256 {
-		fittedNotes = nil
-		bodyBudget = capBytes - len(worstFooter) - 2
-	}
+	// Per-tool boundaries depend only on the schema and cap. Continuations
+	// switch to select:<name>, which may remove every query-specific note.
+	bodyBudget := capBytes - len(worstFooter) - 2
 	if bodyBudget < 256 {
 		return "", false
 	}
@@ -739,14 +693,14 @@ func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page in
 	}
 	if page > len(batches) {
 		msg := fmt.Sprintf("Schema for %s spans %d page(s); requested page %d has no remaining properties.", name, len(batches), page)
-		return joinToolSearchSections(msg, fittedNotes, capBytes), true
+		return joinToolSearchSections(msg, extraNotes, capBytes), true
 	}
 
 	block, ok := marshalBatch(batches[page-1], page, len(batches))
 	if !ok {
 		return "", false
 	}
-	notes := append([]string{buildFooter(page, len(batches))}, fittedNotes...)
+	notes := append([]string{buildFooter(page, len(batches))}, extraNotes...)
 	return joinToolSearchSections(block, notes, capBytes), true
 }
 
@@ -759,19 +713,15 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 		}
 		return msg
 	}
-	maxChunkDigits := max(999, len(fullLine)/minChunkBytes+1)
+	// A rune-safe cut may leave up to UTFMax-1 bytes unused in each chunk.
+	maxChunkDigits := max(999, len(fullLine)/(minChunkBytes-utf8.UTFMax+1)+1)
 	worstHeader := fmt.Sprintf("<function-part name=%q page=\"%d\" total_pages=\"%d\">\n", name, maxChunkDigits, maxChunkDigits)
 	const closeTag = "\n</function-part>"
 	// Use p < total so worstFooter reserves the non-final continuation hint bytes.
 	worstFooter := buildFooter(maxChunkDigits-1, maxChunkDigits)
 
-	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/4))
-	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
-	chunkCap := capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
-	if chunkCap < minChunkBytes {
-		fittedNotes = nil
-		chunkCap = capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2
-	}
+	// Optional notes cannot shift the offsets of an advertised continuation.
+	chunkCap := capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2
 	if chunkCap < minChunkBytes {
 		return truncateUTF8WithSuffix(toolMetadataLimitNotice, capBytes, "…")
 	}
@@ -779,12 +729,12 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 	chunks := splitUTF8ByMaxBytes(fullLine, chunkCap)
 	if page > len(chunks) {
 		msg := fmt.Sprintf("Schema for %s spans %d part(s); requested page %d has no remaining data.", name, len(chunks), page)
-		return joinToolSearchSections(msg, fittedNotes, capBytes)
+		return joinToolSearchSections(msg, extraNotes, capBytes)
 	}
 
 	partHeader := fmt.Sprintf("<function-part name=%q page=\"%d\" total_pages=\"%d\">\n", name, page, len(chunks))
 	block := partHeader + chunks[page-1] + closeTag
-	notes := append([]string{buildFooter(page, len(chunks))}, fittedNotes...)
+	notes := append([]string{buildFooter(page, len(chunks))}, extraNotes...)
 	return joinToolSearchSections(block, notes, capBytes)
 }
 
