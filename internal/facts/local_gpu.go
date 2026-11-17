@@ -119,6 +119,66 @@ func darwinGPUCollectCommand() string {
 	return `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
 }
 
+// nvidiaSMIFailureMarkers are phrases from nvidia-smi's own failure messages.
+// nvidia-smi prints them on stdout and exits non-zero, and the collect command
+// then runs the lspci fallback, so they arrive mixed in with GPU lines. No GPU
+// model contains any of them.
+var nvidiaSMIFailureMarkers = []string{
+	"nvidia-smi has failed",
+	"couldn't communicate with the nvidia driver",
+	"nvidia-smi couldn't find",
+	"failed to initialize nvml",
+	"no devices were found",
+	"driver/library version mismatch",
+	"unable to determine the device handle",
+}
+
+// withoutNvidiaSMIFailures drops nvidia-smi's failure lines so they never
+// become a GPU (one became a cuda-capable "GPU" named after the message).
+func withoutNvidiaSMIFailures(out string) string {
+	lines := strings.Split(out, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		l := strings.ToLower(line)
+		failure := false
+		for _, m := range nvidiaSMIFailureMarkers {
+			if strings.Contains(l, m) {
+				failure = true
+				break
+			}
+		}
+		if !failure {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// parseGPUCollectOutput reads the output of linuxGPUCollectCommand,
+// darwinGPUCollectCommand or the fact bundle's gpu field. nvidia-smi CSV has
+// commas, system_profiler has "Chipset Model", and lspci lines are one model
+// each. nvidia-smi failure lines are dropped first. It returns nil when the
+// output holds no GPU line.
+func parseGPUCollectOutput(out string) []models.GPUInfo {
+	out = strings.TrimSpace(withoutNvidiaSMIFailures(out))
+	if out == "" {
+		return nil
+	}
+	if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
+		return parseNvidiaSMIOutput(out)
+	}
+	if strings.Contains(out, "Chipset Model") {
+		return parseSystemProfilerGPUs(out)
+	}
+	var gpus []models.GPUInfo
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			gpus = append(gpus, models.GPUFromString(line))
+		}
+	}
+	return gpus
+}
+
 func localGPUsNvidiaSMI(ctx context.Context) []models.GPUInfo {
 	args := localNvidiaSMIMemoryArgs()
 	out, err := exec.CommandContext(ctx, args[0], args[1:]...).Output()
@@ -130,7 +190,7 @@ func localGPUsNvidiaSMI(ctx context.Context) []models.GPUInfo {
 
 func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 	var gpus []models.GPUInfo
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(withoutNvidiaSMIFailures(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

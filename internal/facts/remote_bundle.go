@@ -278,19 +278,8 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 		ApplySysfsBlockTable(res.Volumes, blk)
 	}
 
-	gpuOut := strings.TrimSpace(b64field(kv, "gpu_b64"))
-	if gpuOut != "" {
-		if strings.Contains(gpuOut, ", ") && !strings.Contains(gpuOut, "Chipset Model") {
-			res.GPUs = parseNvidiaSMIOutput(gpuOut)
-		} else if strings.Contains(gpuOut, "Chipset Model") {
-			res.GPUs = parseSystemProfilerGPUs(gpuOut)
-		} else {
-			for _, line := range strings.Split(gpuOut, "\n") {
-				if line = strings.TrimSpace(line); line != "" {
-					res.GPUs = append(res.GPUs, models.GPUFromString(line))
-				}
-			}
-		}
+	if gpus := parseGPUCollectOutput(b64field(kv, "gpu_b64")); gpus != nil {
+		res.GPUs = gpus
 	}
 
 	// Storage class

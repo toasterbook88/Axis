@@ -337,20 +337,8 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		gpuCmd = linuxGPUCollectCommand()
 	}
 	if out, err := c.Exec.Run(ctx, gpuCmd); err == nil {
-		out = strings.TrimSpace(out)
-		if out != "" {
-			// Detect format: nvidia-smi CSV has commas, lspci/system_profiler does not
-			if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseNvidiaSMIOutput(out)
-			} else if strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseSystemProfilerGPUs(out)
-			} else {
-				for _, line := range strings.Split(out, "\n") {
-					if line = strings.TrimSpace(line); line != "" {
-						r.GPUs = append(r.GPUs, models.GPUFromString(line))
-					}
-				}
-			}
+		if gpus := parseGPUCollectOutput(out); gpus != nil {
+			r.GPUs = gpus
 		}
 	}
 
