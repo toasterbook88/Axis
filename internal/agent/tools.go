@@ -311,22 +311,12 @@ func (r *ToolRegistry) Defs() []chat.ToolDef {
 	if r == nil {
 		return nil
 	}
-	bridgeActive := r.hasDeferredTools()
 	out := make([]chat.ToolDef, 0, len(r.defs))
-	var bridges []chat.ToolDef
-	for _, def := range r.defs {
-		name := def.Function.Name
-		if isBridgeTool(name) {
-			if bridgeActive {
-				bridges = append(bridges, def)
-			}
-			continue
-		}
-		if r.callableNonBridge(name) && r.eager(name) {
-			out = append(out, def)
+	for _, entry := range r.CatalogEntries() {
+		if !entry.Deferred {
+			out = append(out, entry.Def)
 		}
 	}
-	out = append(out, bridges...)
 	return out
 }
 

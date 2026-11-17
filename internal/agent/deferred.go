@@ -448,23 +448,9 @@ func truncateUTF8WithSuffix(s string, maxBytes int, suffix string) string {
 		return s
 	}
 	if maxBytes <= len(suffix) {
-		return truncateUTF8Bytes(suffix, maxBytes)
+		return truncateUTF8(suffix, maxBytes)
 	}
-	return truncateUTF8Bytes(s, maxBytes-len(suffix)) + suffix
-}
-
-func truncateUTF8Bytes(s string, maxBytes int) string {
-	if maxBytes <= 0 {
-		return ""
-	}
-	if len(s) <= maxBytes {
-		return s
-	}
-	end := maxBytes
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	return s[:end]
+	return truncateUTF8(s, maxBytes-len(suffix)) + suffix
 }
 
 func splitUTF8ByMaxBytes(s string, maxBytes int) []string {
