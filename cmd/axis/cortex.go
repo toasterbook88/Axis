@@ -22,15 +22,14 @@ const cortexRecallTimeout = 45 * time.Second
 func cortexCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cortex",
-		Short: "Interact with the Cortex cluster brain",
-		Long: "Cortex is an optional coordination layer.\n" +
-			"It provides distributed vector memory (Qdrant), a CI/CD event bus,\n" +
-			"and cross-agent locking.\n\n" +
+		Short: "Optional MCP client for a coordination service",
+		Long: "Optional MCP client for a coordination service. Axis does not run a\n" +
+			"Cortex server; this command only dials one when configured.\n\n" +
 			"Set AXIS_CORTEX_URL to an explicit MCP service URL (http or https;\n" +
 			"a URL with no path gets /mcp). Optional AXIS_CORTEX_QDRANT_URL adds the memory count.\n" +
 			"Without AXIS_CORTEX_URL the target node is resolved from AXIS_CORTEX_NODE,\n" +
-			"role: cortex in nodes.yaml, or a node named cortex (or foundry for backward\n" +
-			"compatibility), using http://<hostname>:8200/mcp.\n" +
+			"role: cortex in nodes.yaml, or a node named cortex (legacy fallback:\n" +
+			"a node named foundry), using http://<hostname>:8200/mcp.\n" +
 			"Auth token: AXIS_CORTEX_SECRET env var or ~/.axis/cortex.token file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()

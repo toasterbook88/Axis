@@ -100,3 +100,58 @@ func TestColorWriterClosePropagatesWriteError(t *testing.T) {
 		t.Fatalf("expected Close to propagate write error, got %v", err)
 	}
 }
+
+func TestColorWriterCloseCallsCloseThought(t *testing.T) {
+	sink := &recordingThoughtSink{}
+	cw := NewColorWriter(sink)
+	cw.WriteThought("open thought")
+	if err := cw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if sink.closed != 1 {
+		t.Fatalf("closed = %d, want 1", sink.closed)
+	}
+}
+
+func TestColorWriterWriteThoughtEdgeCases(t *testing.T) {
+	// Nil receiver and empty strings must be harmless no-ops.
+	var nilCW *ColorWriter
+	nilCW.WriteThought("ignored")
+	nilCW.CloseThought()
+
+	// Wrapping a plain bytes.Buffer drops out-of-band reasoning cleanly without touching visible output.
+	var plain bytes.Buffer
+	plainCW := NewColorWriter(&plain)
+	plainCW.WriteThought("reasoning")
+	plainCW.CloseThought()
+	_, _ = plainCW.Write([]byte("visible"))
+	_ = plainCW.Close()
+	if plain.String() != "visible" {
+		t.Fatalf("plain buffer = %q, want %q", plain.String(), "visible")
+	}
+
+	// Empty WriteThought does not invoke sink; pending single backtick in cw.buf stays intact across out-of-band thoughts.
+	sink := &recordingThoughtSink{}
+	cw := NewColorWriter(sink)
+	cw.WriteThought("")
+	if len(sink.thoughts) != 0 {
+		t.Fatalf("empty WriteThought recorded %v", sink.thoughts)
+	}
+	if _, err := cw.Write([]byte("use `")); err != nil {
+		t.Fatalf("Write prefix: %v", err)
+	}
+	cw.WriteThought("check")
+	cw.CloseThought()
+	if _, err := cw.Write([]byte("ls` ok")); err != nil {
+		t.Fatalf("Write suffix: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := strings.Join(sink.thoughts, ""); got != "check" {
+		t.Fatalf("thoughts = %q, want %q", got, "check")
+	}
+	if out := sink.buf.String(); !strings.Contains(out, "`\033[33mls`\033[0m ok") {
+		t.Fatalf("inline code highlighting corrupted across WriteThought: %q", out)
+	}
+}

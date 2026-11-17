@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -135,6 +136,7 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 		"spawn_subagent", "run_on_node", "remote_read_file", "remote_grep", "remote_list",
 		"fleet_exec", "remote_write_file", "remote_tail_logs",
 		"todo", "undo_last", "review_changes", "web_fetch", "web_search",
+		"consult_model",
 		"run_background", "check_task", "list_background_tasks",
 		"branch_session", "rollback_session",
 	}
@@ -1681,7 +1683,7 @@ func TestIsReadOnlyTool(t *testing.T) {
 			t.Errorf("expected %q to be read-only", name)
 		}
 	}
-	notReadOnly := []string{"run_shell", "unknown", ""}
+	notReadOnly := []string{"run_shell", "unknown", "", "consult_model"}
 	for _, name := range notReadOnly {
 		if isReadOnlyTool(name) {
 			t.Errorf("expected %q to NOT be read-only", name)
@@ -1740,5 +1742,61 @@ func TestAgentTurn0FailureCleansUpUserPrompt(t *testing.T) {
 
 	if got := agent.Conversation().Len(); got != initialLen {
 		t.Fatalf("conversation length after turn 0 error = %d, want initial %d (user prompt must be removed on failure)", got, initialLen)
+	}
+}
+
+func TestDispatchFleetExecRequiresRunner(t *testing.T) {
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		Output:  &bytes.Buffer{},
+		ToolContext: NewToolContext(&RuntimeView{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "lab-5"}},
+			},
+		}, nil),
+	})
+	args := json.RawMessage(mustJSON(t, map[string]any{
+		"nodes":   []string{"lab-5"},
+		"command": "uname -a",
+	}))
+	_, err := a.dispatchFleetExec(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("expected not-configured error, got %v", err)
+	}
+}
+
+func TestDispatchFleetExecUsesGuardedRunner(t *testing.T) {
+	var mu sync.Mutex
+	var sawNodes []string
+	var sawCmd string
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		Output:  &bytes.Buffer{},
+		ToolContext: NewToolContext(&RuntimeView{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "lab-5"}, {Name: "lab-6"}},
+			},
+		}, nil),
+		RunOnNode: func(_ context.Context, node, command string) (string, error) {
+			mu.Lock()
+			sawNodes = append(sawNodes, node)
+			sawCmd = command
+			mu.Unlock()
+			return `{"ok":true}`, nil
+		},
+	})
+	args := json.RawMessage(mustJSON(t, map[string]any{
+		"nodes":   []string{"lab-5", "lab-6"},
+		"command": "uptime",
+	}))
+	out, err := a.dispatchFleetExec(context.Background(), args)
+	if err != nil {
+		t.Fatalf("dispatchFleetExec: %v", err)
+	}
+	if sawCmd != "uptime" || len(sawNodes) != 2 {
+		t.Fatalf("runner saw nodes=%v cmd=%q", sawNodes, sawCmd)
+	}
+	if !strings.Contains(out, "lab-5") || !strings.Contains(out, "lab-6") {
+		t.Fatalf("unexpected fleet output: %q", out)
 	}
 }

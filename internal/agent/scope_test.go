@@ -29,10 +29,29 @@ func containsName(names []string, want string) bool {
 	return false
 }
 
+func TestConsultModelIsHiddenWithoutResolver(t *testing.T) {
+	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+	if containsName(defNames(r), consultModelTool) {
+		t.Fatal("a registry with no resolver advertised consult_model")
+	}
+	if r.Visible(consultModelTool) {
+		t.Fatal("a registry with no resolver reported consult_model visible")
+	}
+	r.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return &blindSeat{}, "seat-a", nil, nil
+	})
+	if !containsName(defNames(r), consultModelTool) {
+		t.Fatal("a wired registry did not advertise consult_model")
+	}
+}
+
 func TestObserveDefsHideProhibitedTools(t *testing.T) {
 	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+	r.SetConsultResolver(func(context.Context, string) (ChatBackend, string, func(), error) {
+		return &blindSeat{}, "seat-a", nil, nil
+	})
 	names := defNames(r)
-	for _, want := range []string{"read_file", "todo", "axis_status", "axis_facts", "axis_place"} {
+	for _, want := range []string{"read_file", "todo", "axis_status", "axis_facts", "axis_place", "consult_model"} {
 		if !containsName(names, want) {
 			t.Errorf("observe defs missing %s", want)
 		}

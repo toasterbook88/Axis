@@ -5,6 +5,15 @@ import (
 	"strings"
 )
 
+// ThoughtWriter receives out-of-band reasoning tokens (e.g. delta.reasoning_content)
+// separately from visible assistant answer content. Interactive consoles implement it
+// so thinking indicators and collapsible thought blocks work without polluting
+// plain or piped stdout.
+type ThoughtWriter interface {
+	WriteThought(thought string)
+	CloseThought()
+}
+
 // ColorWriter statefully highlights code blocks (bold cyan) and inline code (yellow)
 // in streamed agent output.
 type ColorWriter struct {
@@ -19,6 +28,42 @@ func NewColorWriter(w io.Writer) *ColorWriter {
 	return &ColorWriter{w: w}
 }
 
+// WriteThought forwards reasoning tokens when the underlying writer accepts thoughts.
+func (cw *ColorWriter) WriteThought(thought string) {
+	if cw == nil || thought == "" {
+		return
+	}
+	writeThought(cw.w, thought)
+}
+
+// CloseThought signals the end of an out-of-band reasoning span on supporting sinks.
+func (cw *ColorWriter) CloseThought() {
+	if cw == nil {
+		return
+	}
+	closeThought(cw.w)
+}
+
+func writeThought(w io.Writer, thought string) {
+	if w == nil || thought == "" {
+		return
+	}
+	if tw, ok := w.(ThoughtWriter); ok {
+		tw.WriteThought(thought)
+	}
+}
+
+func closeThought(w io.Writer) {
+	if w == nil {
+		return
+	}
+	if tw, ok := w.(ThoughtWriter); ok {
+		tw.CloseThought()
+	}
+}
+
+// Write formats markdown backtick spans and streams answer bytes to the
+// underlying io.Writer without altering out-of-band ThoughtWriter routing.
 func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 	cw.buf += string(p)
 
@@ -78,8 +123,10 @@ func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// Close flushes any remaining buffered text and resets styles.
+// Close closes any active out-of-band thought span, flushes remaining buffered
+// answer bytes, and resets terminal color styles.
 func (cw *ColorWriter) Close() error {
+	cw.CloseThought()
 	if len(cw.buf) > 0 {
 		if _, err := cw.w.Write([]byte(cw.buf)); err != nil {
 			cw.buf = ""

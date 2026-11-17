@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +156,87 @@ func TestProbeBackend_LocalNodeBindingKeepsBaseURL(t *testing.T) {
 	}
 	if p.ProbedURL != srv.URL+"/v1/models" {
 		t.Fatalf("probed URL = %q, want local base_url", p.ProbedURL)
+	}
+}
+
+func TestProbeAllBackends_IndependentBudgets(t *testing.T) {
+	// Two hangers that wait on the request context, then a healthy backend.
+	// A shared parent deadline used to cancel later probes; each backend now
+	// gets its own timeout, and once the overall budget is spent later rows
+	// are Skipped (not a false observed failure).
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(hang.Close)
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"alive"}]}`))
+	}))
+	t.Cleanup(ok.Close)
+
+	cfg := &config.AIConfig{Backends: []config.AIBackendConfig{
+		{Name: "hang-a", Kind: config.AIBackendOpenAICompatible, BaseURL: hang.URL + "/v1"},
+		{Name: "hang-b", Kind: config.AIBackendOpenAICompatible, BaseURL: hang.URL + "/v1"},
+		{Name: "alive", Kind: config.AIBackendOpenAICompatible, BaseURL: ok.URL + "/v1"},
+	}}
+	// Parent shorter than two per-backend budgets (3s each): first hang is
+	// observed; later rows are Skipped after the parent expires.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	probes := llmrouter.ProbeAllBackendsForNodes(ctx, cfg, nil, nil)
+	if len(probes) != 3 {
+		t.Fatalf("probes=%d, want 3", len(probes))
+	}
+	if probes[0].Skipped || probes[0].OK {
+		t.Fatalf("hang-a should be an observed failure, got %+v", probes[0])
+	}
+	if !probes[2].Skipped {
+		t.Fatalf("alive must be Skipped after overall budget is spent, got %+v", probes[2])
+	}
+}
+
+func TestProbeAllBackends_HealthyAfterHangsWhenBudgetRemains(t *testing.T) {
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(hang.Close)
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"alive"}]}`))
+	}))
+	t.Cleanup(ok.Close)
+
+	cfg := &config.AIConfig{Backends: []config.AIBackendConfig{
+		{Name: "hang-a", Kind: config.AIBackendOpenAICompatible, BaseURL: hang.URL + "/v1"},
+		{Name: "hang-b", Kind: config.AIBackendOpenAICompatible, BaseURL: hang.URL + "/v1"},
+		{Name: "alive", Kind: config.AIBackendOpenAICompatible, BaseURL: ok.URL + "/v1"},
+	}}
+	// Parent covers two 3s hang budgets plus the healthy probe.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	probes := llmrouter.ProbeAllBackendsForNodes(ctx, cfg, nil, nil)
+	alive := probes[2]
+	if alive.Skipped || !alive.OK {
+		t.Fatalf("alive should be probed OK when budget remains, got %+v", alive)
+	}
+}
+
+func TestProbeAllBackends_SkippedWhenParentDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := &config.AIConfig{Backends: []config.AIBackendConfig{
+		{Name: "a", Kind: config.AIBackendOpenAICompatible, BaseURL: "http://127.0.0.1:9/v1"},
+		{Name: "b", Kind: config.AIBackendOpenAICompatible, BaseURL: "http://127.0.0.1:9/v1"},
+	}}
+	probes := llmrouter.ProbeAllBackendsForNodes(ctx, cfg, nil, nil)
+	if len(probes) != 2 {
+		t.Fatalf("probes=%d", len(probes))
+	}
+	for _, p := range probes {
+		if !p.Skipped || p.OK {
+			t.Fatalf("want skipped failure, got %+v", p)
+		}
+		if !strings.Contains(p.Message, "probe skipped") {
+			t.Fatalf("message=%q", p.Message)
+		}
 	}
 }
 

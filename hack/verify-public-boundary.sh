@@ -71,4 +71,21 @@ if (( ${#ip_hits[@]} > 0 )); then
   fail "${#ip_hits[@]} non-documentation IPv4 literal(s); use RFC 5737 / example addresses (placement-selection-contract.md §12)"
 fi
 
+# 3. Ownership wording: the public tree is a Cortex *client*. Phrases that
+# claim a specific host runs the server reintroduce the client/server mix-up.
+ownership_hits=()
+ownership_regex='(running on Foundry|Foundry:8200|cluster brain on Foundry|Cortex cluster brain on Foundry)'
+while IFS= read -r -d '' f; do
+  [[ -f "$f" ]] || continue
+  [[ "$f" == "hack/verify-public-boundary.sh" ]] && continue
+  while IFS= read -r line; do
+    ownership_hits+=("$f: $line")
+  done < <(rg -n -e "$ownership_regex" "$f" || true)
+done < <(git ls-files -z)
+
+if (( ${#ownership_hits[@]} > 0 )); then
+  printf '%s\n' "${ownership_hits[@]}" >&2
+  fail "${#ownership_hits[@]} Cortex ownership-wording hit(s); describe an optional MCP client, not a host-bound server"
+fi
+
 printf 'public boundary guardrails passed\n'
