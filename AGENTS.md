@@ -150,7 +150,8 @@ Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrC
 - `~/.axis/ai.yaml`: optional inference backends and roles (`docs/runbooks/ai-config.md`).
 - State under `~/.axis/` (owner-only `0700`/`0600`): `state.json`, `skills.json`, `snapshot.json`,
   `ledger.json`, `events*.jsonl`, `logs/task-*.log`, `logs/agent-*.jsonl`, `*-history.json`.
-  Corrupt files are quarantined to `.corrupt-*` and surfaced as warnings, never crashes.
+  Corrupt `state.json` and `skills.json` files are quarantined to `.corrupt-*` and surfaced as warnings.
+  Other persisted files may return a load error; callers must handle that error without assuming quarantine.
 
 ## 7. Working style
 
