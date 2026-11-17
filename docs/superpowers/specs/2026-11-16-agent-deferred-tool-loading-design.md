@@ -272,3 +272,23 @@ Date: 2026-11-17
 Verdict: approve
 
 Note: Independently reviewed the full diff against this spec with no findings or questions. Agent, chat and CLI suites and local gates passed with the directly installed Go toolchain. The live release lookup in the repository-truth gate was DNS-blocked in the reviewer sandbox; the final integrated candidate still requires the full preflight. Both final reviewers used the OpenAI GPT vendor family. The earlier live backend KV-cache question remains open.
+
+Kind: diff
+Reviewer: fresh-context subagent c6e6ef60-d771-4c39-ac9a-5d5264843853
+Model: gemini
+Base: 4465fa4a81a14c19fbfbdca00feed2f976da0e0e
+Head: 255a5d9fc6078ed6644de20f58903f204f80019e
+Date: 2026-11-17
+Verdict: approve
+
+Note: Independently reviewed the full diff against this spec at Head 255a5d9fc6078ed6644de20f58903f204f80019e (including CatalogEntries reuse in Defs() and truncateUTF8 delegation in truncateUTF8WithSuffix) with no findings or questions. Executed unit tests, race detector suites, and all repository gates in an isolated clone. Both final reviewers at 255a5d9fc6078ed6644de20f58903f204f80019e used the Gemini model family (following earlier OpenAI GPT and Claude reviews). The earlier live backend KV-cache question remains open.
+
+Kind: diff
+Reviewer: fresh-context subagent e347229e-82c9-467b-8745-41d0b88ee113
+Model: gemini
+Base: 4465fa4a81a14c19fbfbdca00feed2f976da0e0e
+Head: 255a5d9fc6078ed6644de20f58903f204f80019e
+Date: 2026-11-17
+Verdict: approve
+
+Note: Independently reviewed the full diff across all 25 changed files against this spec with no findings. Unit tests, race detector suites, and all repository gates passed in an isolated clone. Both final reviewers at 255a5d9fc6078ed6644de20f58903f204f80019e used the Gemini model family. Open question: live llama.cpp / vLLM prompt KV-cache reuse across multi-round tool_search -> tool_call turns in axis agent remains an online backend timing probe outside the offline test boundary (unit test TestDeferredTools_KVCacheDefsAndSystemPrefixByteStable verifies byte-identical tools[] JSON and msgs[0] across rounds).
