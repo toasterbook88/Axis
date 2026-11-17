@@ -60,11 +60,14 @@ latest_commit="${AXIS_RELEASE_CLAIMS_TAG_COMMIT:-}"
 if [[ -z "$latest_commit" ]]; then
   # ^{commit} dereferences an annotated tag object to the commit it points at;
   # README's "tag commit" quotes the commit (e.g. v0.24.0 -> 16eeb3b), never
-  # the tag object's own SHA.
-  latest_commit="$(git rev-parse --short "${latest}^{commit}" 2>/dev/null || true)"
+  # the tag object's own SHA. The full 40-character form is read on purpose:
+  # `git rev-parse --short` returns seven characters in a small CI clone and
+  # eight or more in a developer's repository, so a short reference makes the
+  # comparison depend on how many objects the checkout happens to hold.
+  latest_commit="$(git rev-parse "${latest}^{commit}" 2>/dev/null || true)"
 fi
-[[ -n "$latest_commit" ]] \
-  || fail "cannot resolve commit for tag $latest; pass AXIS_RELEASE_CLAIMS_TAG_COMMIT"
+[[ "$latest_commit" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "cannot resolve tag $latest to a full 40-character commit SHA; pass AXIS_RELEASE_CLAIMS_TAG_COMMIT"
 
 latest_minor="${latest%.*}"   # v0.25.0 -> v0.25
 
@@ -86,13 +89,20 @@ claimed_version="$(printf '%s\n' "$status_row" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9
 [[ "$claimed_version" == "$latest" ]] \
   || fail "$readme 'Latest release' row says $claimed_version but the newest release tag is $latest"
 
+# The single-quoted backticks below are literals matched in the docs, not
+# command substitution.
+# shellcheck disable=SC2016
 claimed_commit="$(printf '%s\n' "$status_row" | sed -n 's/.*tag commit `\([0-9a-f][0-9a-f]*\)`.*/\1/p' | head -1 || true)"
 [[ -n "$claimed_commit" ]] \
   || fail "$readme 'Latest release' row cites no 'tag commit \`<sha>\`': $status_row"
-# A prefix match keeps both the seven-character short form and a full SHA valid.
+# README quotes a short form; the reference is the full SHA, so the reference
+# must start with the cited prefix. Seven characters is the shortest git uses.
+[[ "$claimed_commit" =~ ^[0-9a-f]{7,40}$ ]] \
+  || fail "$readme 'Latest release' row cites '$claimed_commit', which is not a 7-to-40-character commit prefix: $status_row"
+short_commit="${latest_commit:0:8}"
 case "$latest_commit" in
   "$claimed_commit"*) ;;
-  *) fail "$readme 'Latest release' row cites tag commit $claimed_commit but $latest is at $latest_commit" ;;
+  *) fail "$readme 'Latest release' row cites tag commit $claimed_commit but $latest is at $short_commit" ;;
 esac
 
 # --- 3. Supported security line ---------------------------------------------
@@ -100,12 +110,14 @@ esac
 # the minor version must move both statements, or the policy advertises a line
 # nobody ships. Hotfixes on an older line are not produced from main, so the
 # newest tag is always the supported line.
+# shellcheck disable=SC2016
 readme_line="$(grep -oE '`v[0-9]+\.[0-9]+\.x`' "$readme" | head -1 | tr -d '`' || true)"
 [[ -n "$readme_line" ]] \
   || fail "$readme declares no 'supported security line' \`vX.Y.x\`; if the wording changed, update this script"
 [[ "$readme_line" == "$latest_minor.x" ]] \
   || fail "$readme says the supported security line is $readme_line but the newest release is $latest ($latest_minor.x); update it together with SECURITY.md"
 
+# shellcheck disable=SC2016
 security_line="$(grep -oE '^\| `v[0-9]+\.[0-9]+\.x` \| yes \|' "$security" | grep -oE 'v[0-9]+\.[0-9]+\.x' | head -1 || true)"
 [[ -n "$security_line" ]] \
   || fail "$security declares no supported '| \`vX.Y.x\` | yes |' row; if the table changed shape, update this script"
@@ -115,4 +127,4 @@ security_line="$(grep -oE '^\| `v[0-9]+\.[0-9]+\.x` \| yes \|' "$security" | gre
 [[ "$readme_line" == "$security_line" ]] \
   || fail "$readme says $readme_line and $security says $security_line for the supported security line; they must agree"
 
-printf 'release claims passed: %s at %s, security line %s\n' "$latest" "$latest_commit" "$readme_line"
+printf 'release claims passed: %s at %s, security line %s\n' "$latest" "$short_commit" "$readme_line"
