@@ -5,17 +5,29 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"time"
 )
 
-// DialOutboundContext resolves once using ctx, applies the outbound address
-// policy, then dials only those literal IPs. It must not be combined with a
-// proxy that resolves the original hostname independently.
-func DialOutboundContext(ctx context.Context, network, address string, allowedHosts []string) (net.Conn, error) {
+const outboundFallbackDelay = 300 * time.Millisecond
+
+// NewOutboundDialer snapshots the DNS resolver and explicit allowlist before
+// HTTP transport starts asynchronous dials. Each call resolves once using ctx,
+// applies the outbound address policy, and dials only those literal IPs. It must
+// not be combined with a proxy that resolves the hostname independently.
+func NewOutboundDialer(allowedHosts []string) func(context.Context, string, string) (net.Conn, error) {
+	resolver := net.DefaultResolver
+	allowedHosts = slices.Clone(allowedHosts)
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialOutboundContext(ctx, network, address, allowedHosts, resolver)
+	}
+}
+
+func dialOutboundContext(ctx context.Context, network, address string, allowedHosts []string, resolver *net.Resolver) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve outbound host %q: %w", host, err)
 	}
@@ -29,16 +41,60 @@ func DialOutboundContext(ctx context.Context, network, address string, allowedHo
 			}
 		}
 	}
+	return dialResolvedIPs(ctx, network, port, ips)
+}
+
+func dialResolvedIPs(ctx context.Context, network, port string, ips []net.IPAddr) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	results := make(chan result)
 	var dialer net.Dialer
-	for _, ip := range ips {
-		var conn net.Conn
-		conn, err = dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		if ctx.Err() != nil {
+	next, pending := 0, 0
+	startDial := func() {
+		ip := ips[next]
+		next++
+		pending++
+		go func() {
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			select {
+			case results <- result{conn: conn, err: err}:
+			case <-ctx.Done():
+				if conn != nil {
+					conn.Close()
+				}
+			}
+		}()
+	}
+	startDial()
+	// Preserve fallback when a preferred address stalls, without resolving the
+	// hostname again. Failed attempts accelerate the next checked address.
+	timer := time.NewTimer(outboundFallbackDelay)
+	defer timer.Stop()
+	var lastErr error
+	for pending > 0 {
+		select {
+		case <-ctx.Done():
 			return nil, ctx.Err()
+		case res := <-results:
+			pending--
+			if res.err == nil {
+				return res.conn, nil
+			}
+			lastErr = res.err
+			if next < len(ips) {
+				startDial()
+				timer.Reset(outboundFallbackDelay)
+			}
+		case <-timer.C:
+			if next < len(ips) {
+				startDial()
+				timer.Reset(outboundFallbackDelay)
+			}
 		}
 	}
-	return nil, err
+	return nil, lastErr
 }

@@ -107,10 +107,11 @@ func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[str
 	//lint:ignore SA1019 Clear the legacy hook so TLS cannot bypass guarded DialContext.
 	transport.DialTLS = nil
 	transport.DialTLSContext = nil
+	dialOutbound := netutil.NewOutboundDialer(allowedHosts)
 	transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
 		// Transport may detach its dial context for connection reuse. This
 		// one-probe transport must honor the endpoint's deadline and cancellation.
-		return netutil.DialOutboundContext(ctx, network, address, allowedHosts)
+		return dialOutbound(ctx, network, address)
 	}
 	defer transport.CloseIdleConnections()
 

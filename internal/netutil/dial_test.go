@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestDialOutboundContextAllowlist(t *testing.T) {
+func TestOutboundDialerAllowlist(t *testing.T) {
 	ResetInternalAllowlist()
 	t.Cleanup(ResetInternalAllowlist)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -19,29 +19,31 @@ func TestDialOutboundContextAllowlist(t *testing.T) {
 	defer listener.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if conn, err := DialOutboundContext(ctx, "tcp", listener.Addr().String(), nil); err == nil {
+	dial := NewOutboundDialer(nil)
+	if conn, err := dial(ctx, "tcp", listener.Addr().String()); err == nil {
 		conn.Close()
 		t.Fatal("unallowlisted loopback was dialed")
 	} else if !strings.Contains(err.Error(), "disallowed internal address") {
 		t.Fatalf("expected address-policy rejection: %v", err)
 	}
-	conn, err := DialOutboundContext(ctx, "tcp", listener.Addr().String(), []string{"127.0.0.1"})
+	allowedDial := NewOutboundDialer([]string{"127.0.0.1"})
+	conn, err := allowedDial(ctx, "tcp", listener.Addr().String())
 	if err != nil {
 		t.Fatalf("explicit allowlist: %v", err)
 	}
 	conn.Close()
 	AllowInternalHost("127.0.0.1")
-	conn, err = DialOutboundContext(ctx, "tcp", listener.Addr().String(), nil)
+	conn, err = dial(ctx, "tcp", listener.Addr().String())
 	if err != nil {
 		t.Fatalf("registered allowlist: %v", err)
 	}
 	conn.Close()
 }
 
-func TestDialOutboundContextCancellation(t *testing.T) {
+func TestOutboundDialerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := DialOutboundContext(ctx, "tcp", "192.0.2.10:80", nil)
+	_, err := NewOutboundDialer(nil)(ctx, "tcp", "192.0.2.10:80")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected parent cancellation, got %v", err)
 	}
