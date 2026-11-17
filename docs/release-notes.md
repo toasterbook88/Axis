@@ -8,6 +8,78 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.25.0 upgrade guide
+
+[v0.25.0](https://github.com/toasterbook88/axis/releases/tag/v0.25.0) was published
+from commit `8578cb2a`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
+v0.24.2 are listed in the [changelog](../CHANGELOG.md#v0250-2026-11-16).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### Cloud agent streams use an idle guard
+
+Cloud agent streams no longer abort at a fixed 120 seconds. `CloudBackend`
+follows the command's `--timeout` and context, and uses a 120-second *idle*
+guard: a healthy stream that is slow keeps going, and a stalled one fails fast
+with `stream idle timeout`. Reasoning deltas from OpenAI-compatible and
+Anthropic endpoints now appear as thinking in the console instead of being
+dropped, thinking spans across rounds accumulate their durations, and
+compaction asks for a non-thinking summary where the server supports it.
+
+### `axis agent` can consult a second model
+
+`consult_model` asks one other configured model from the `/model` list a single
+question and returns its text; the driver model, backend, and tool list stay in
+place. The consulted seat receives one user message and no tools. The first call
+asks the operator in every mode, not only in ask mode. The tool is hidden in
+cluster scope and in child agents. A remote seat is reached through the same
+address, node-name, and SSH-tunnel fallback as `/model`, and that tunnel closes
+when the call ends.
+
+### Desk leases fail closed before discovery
+
+`axis agent --desk-lease` now refuses before cluster discovery when the caller's
+lease is missing, unloaded, ended, asleep, busy, or stale. The command exits
+non-zero with the refusal name instead of running without a lease.
+
+### A2A refuses a caller-reported terminal state
+
+A2A `message:send` rejects `completed`, `failed`, `rejected`, and `approved`
+states reported by the caller with 400 and stores nothing, so a task's terminal
+state stays the executor's to report. An empty sub-agent answer is now an error
+instead of a synthesized success sentence.
+
+### `axis doctor` warns when the daemon has no service
+
+On Linux, `axis doctor` reports a running daemon that its own service did not
+start, by reading the daemon's systemd cgroup. A daemon started in a login
+session, another scope, or an unrelated service will not restart after a crash
+or start after a reboot. The check passes for a daemon in a service whose name
+contains `axis`, and reports nothing when the cgroup is unreadable or hidden by
+a container. It is read-only.
+
+### `axis update` writes the new binary durably
+
+`axis update` fsyncs the new binary before renaming it over the old one, then
+fsyncs the directory, so a crash or power loss right after an update leaves the
+old binary or the complete new one, never a truncated file. An interrupted
+update's temp file is now named `axis.tmp-*`.
+
+### Also in this release
+
+- Builds use Go 1.26.11, which fixes the `net/http` standard-library
+  vulnerability GO-2026-6859 (CVE-2026-97054).
+- `axis version` compares CLI and daemon commits by prefix, so a release
+  binary's seven-character commit no longer produces a false `differs` warning
+  against a local build of the same revision.
+- AI backend probes get one timeout each and are marked `Skipped` when the
+  caller's overall budget is spent, so a slow earlier backend cannot cancel
+  later ones. `axis doctor` warns for a skipped backend without offering a
+  repair.
+- The off-box address refusal now names the token it protects: the local API
+  token (`~/.axis/token`, or `AXIS_API_TOKEN`), not a "cluster token".
+
 ## v0.24.0 upgrade guide
 
 [v0.24.0](https://github.com/toasterbook88/axis/releases/tag/v0.24.0) was published

@@ -15,6 +15,8 @@
 #      matching WithReadOnlyHintAnnotation(true) in server.go.
 #   4. Canonical docs do not contradict live mesh and reservation wiring.
 #   5. Every released git tag >= v0.7.0 has a CHANGELOG.md entry.
+#   6. README's install pins, Latest-release row and supported security line
+#      name the newest release tag (hack/verify-release-claims.sh).
 #
 # When these disagree, fix the doc to match the code (the code is the source
 # of truth) or, for CHANGELOG, add the missing entry from the GitHub release
@@ -304,6 +306,14 @@ else
     fail "CHANGELOG.md missing entries for released tags: ${missing[*]}"
   fi
 fi
+
+# --- 6. Release claim freshness ----------------------------------------------
+# Section 5 proves every tag has a changelog entry; it never checks that
+# README.md points at that tag. v0.25.0 shipped with README pinned to v0.24.0
+# and SECURITY.md still declaring v0.24.x supported, and every gate passed.
+# The guard is separate so its regression tests can drive it with fixtures.
+./hack/verify-release-claims-tests.sh
+./hack/verify-release-claims.sh
 
 ./hack/verify-public-boundary.sh
 
