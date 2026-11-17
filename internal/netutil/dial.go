@@ -45,6 +45,7 @@ func dialOutboundContext(ctx context.Context, network, address string, allowedHo
 }
 
 func dialResolvedIPs(ctx context.Context, network, port string, ips []net.IPAddr) (net.Conn, error) {
+	ips = interleaveIPFamilies(ips)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -97,4 +98,31 @@ func dialResolvedIPs(ctx context.Context, network, port string, ips []net.IPAddr
 		}
 	}
 	return nil, lastErr
+}
+
+// interleaveIPFamilies keeps each family's order but puts the alternate family
+// second. Its first attempt therefore starts after one fallback delay, regardless
+// of the number of preferred-family records, without discarding any checked IPs.
+func interleaveIPFamilies(ips []net.IPAddr) []net.IPAddr {
+	if len(ips) < 2 {
+		return ips
+	}
+	var queues [2][]net.IPAddr
+	firstIsIPv4 := ips[0].IP.To4() != nil
+	for _, ip := range ips {
+		family := 0
+		if (ip.IP.To4() != nil) != firstIsIPv4 {
+			family = 1
+		}
+		queues[family] = append(queues[family], ip)
+	}
+	ordered := make([]net.IPAddr, 0, len(ips))
+	for i := 0; len(ordered) < len(ips); i++ {
+		for _, queue := range queues {
+			if i < len(queue) {
+				ordered = append(ordered, queue[i])
+			}
+		}
+	}
+	return ordered
 }
