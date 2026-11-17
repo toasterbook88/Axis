@@ -349,7 +349,7 @@ func TestRunModelStartRejectsOccupiedGPU(t *testing.T) {
 	}
 }
 
-func TestRunModelStartRejectsDefaultGPUConflictWithFreeGPUHint(t *testing.T) {
+func TestRunModelStartRejectsGPUConflictWithoutIsolationHint(t *testing.T) {
 	snap := twoGPUDiscreteSnap()
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
@@ -371,7 +371,7 @@ func TestRunModelStartRejectsDefaultGPUConflictWithFreeGPUHint(t *testing.T) {
 
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("expected error when default GPU 0 is occupied and --main-gpu omitted")
+		t.Fatal("expected error when an observed GPU is occupied and --main-gpu omitted")
 	}
 	var receipt models.ModelOperationReceipt
 	if parseErr := json.Unmarshal(buf.Bytes(), &receipt); parseErr != nil {
@@ -380,16 +380,17 @@ func TestRunModelStartRejectsDefaultGPUConflictWithFreeGPUHint(t *testing.T) {
 	if receipt.Disposition != "gpu_occupied" {
 		t.Errorf("receipt.Disposition = %q, want gpu_occupied", receipt.Disposition)
 	}
-	if !strings.Contains(receipt.Error, "--main-gpu 1") {
-		t.Errorf("expected free GPU hint in error, got %q", receipt.Error)
+	if strings.Contains(receipt.Error, "--main-gpu") {
+		t.Errorf("main-gpu does not isolate the launch, but receipt suggests it: %q", receipt.Error)
 	}
 	if len(runner.started) != 0 {
 		t.Fatalf("runner should not have been called: %+v", runner)
 	}
 }
 
-func TestRunModelStartAllowsFreeGPUOnMultiGPUHost(t *testing.T) {
+func TestRunModelStartAllowsGPUHostWithoutObservedGPUOccupancy(t *testing.T) {
 	snap := twoGPUDiscreteSnap()
+	snap.Nodes[0].ResidentModels[0].GPUIndices = nil
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
 
@@ -410,7 +411,7 @@ func TestRunModelStartAllowsFreeGPUOnMultiGPUHost(t *testing.T) {
 	})
 
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("expected free GPU 1 to succeed, got %v", err)
+		t.Fatalf("unobserved GPU occupancy must not reject the launch, got %v", err)
 	}
 	if len(runner.started) != 1 {
 		t.Fatalf("started = %d, want 1", len(runner.started))
