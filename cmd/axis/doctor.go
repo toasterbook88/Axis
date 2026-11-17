@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -79,9 +78,14 @@ var doctorProbeOllama = func(ctx context.Context) doctorBackendStatus {
 
 var doctorProbeHTTP = probeDoctorHTTPEndpoint
 
-const maxDoctorHTTPRedirects = 10
+const (
+	maxDoctorHTTPRedirects = 10
+	doctorHTTPProbeTimeout = 5 * time.Second
+)
 
 func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, doctorHTTPProbeTimeout)
+	defer cancel()
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return 0, fmt.Errorf("invalid URL: %w", err)
@@ -93,14 +97,26 @@ func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[str
 	if host == "" {
 		return 0, fmt.Errorf("URL must include a host")
 	}
-	if !slices.Contains(allowedHosts, host) {
-		if err := netutil.ValidateOutboundURL(rawURL); err != nil {
-			return 0, err
-		}
+	transport := &http.Transport{}
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaults.Clone()
 	}
+	// Probe directly: a proxy could resolve the destination independently and
+	// bypass the dial-time address policy. Keep the URL intact for Host and TLS.
+	transport.Proxy = nil
+	//lint:ignore SA1019 Clear the legacy hook so TLS cannot bypass guarded DialContext.
+	transport.DialTLS = nil
+	transport.DialTLSContext = nil
+	transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		// Transport may detach its dial context for connection reuse. This
+		// one-probe transport must honor the endpoint's deadline and cancellation.
+		return netutil.DialOutboundContext(ctx, network, address, allowedHosts)
+	}
+	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:   doctorHTTPProbeTimeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxDoctorHTTPRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxDoctorHTTPRedirects)
