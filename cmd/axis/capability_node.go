@@ -150,6 +150,10 @@ func runNodeProbe(ctx context.Context, name string) (string, string, error) {
 	return out, ref, nil
 }
 
+// nodeSubject is the one spelling of a machine in the record, so a failure on it
+// can only be closed by a pass on the same machine.
+func nodeSubject(name string) string { return "node:" + strings.ToLower(strings.TrimSpace(name)) }
+
 func capabilityNodeIsLocal(node config.NodeConfig) bool {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -201,12 +205,13 @@ func capabilityTargets(ctx context.Context, nodes []string, all bool, except []s
 // probe script run on it.
 func checkFactsHardwareNode(ctx context.Context, name string) capability.Observation {
 	obs := capability.Observation{Capability: "facts.hardware", Checker: factsHardwareChecker + " --node",
-		Outcome: capability.OutcomeInconclusive, Subject: "node:" + name}
+		Outcome: capability.OutcomeInconclusive, Subject: nodeSubject(name)}
 	nf, err := capabilityNodeFacts(ctx, name)
 	if err != nil {
 		obs.Claim = capabilityClaim("AXIS has no facts for it: " + err.Error())
 		return obs
 	}
+	name, obs.Subject = nf.Name, nodeSubject(nf.Name)
 	if nf.Status == models.StatusUnreachable || nf.Resources == nil {
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS reports it %s; there are no facts to check", nf.Status))
 		return obs
@@ -249,12 +254,13 @@ func checkFactsGPU(ctx context.Context, name string) capability.Observation {
 		gpus = nf.Resources.GPUs
 	} else {
 		obs.Checker += " --node"
-		obs.Subject = "node:" + name
+		obs.Subject = nodeSubject(name)
 		nf, err := capabilityNodeFacts(ctx, name)
 		if err != nil {
 			obs.Claim = capabilityClaim("AXIS has no facts for it: " + err.Error())
 			return obs
 		}
+		name, obs.Subject = nf.Name, nodeSubject(nf.Name)
 		if nf.Status == models.StatusUnreachable || nf.Resources == nil {
 			obs.Claim = capabilityClaim(fmt.Sprintf("AXIS reports it %s; there are no facts to check", nf.Status))
 			return obs

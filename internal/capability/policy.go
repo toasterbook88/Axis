@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,21 +22,29 @@ type Policy struct {
 	Window int `yaml:"window,omitempty" json:"window"`
 	// MinRate is the least share of passes in the window a promotion needs.
 	MinRate float64 `yaml:"min_rate,omitempty" json:"min_rate"`
+	// MinSpan is the least time a promoting streak must cover, as a Go
+	// duration ("6h"), so a level cannot be earned in one burst of checks.
+	MinSpan string `yaml:"min_span,omitempty" json:"min_span,omitempty"`
 }
 
 // Thresholds are the numbers the state machine judges a promotion by. Each
 // journal entry records the ones in force, so the journal replays exactly.
 type Thresholds struct {
-	PromoteAfter int     `json:"promote_after"`
-	Window       int     `json:"window"`
-	MinRate      float64 `json:"min_rate"`
+	PromoteAfter   int     `json:"promote_after"`
+	Window         int     `json:"window"`
+	MinRate        float64 `json:"min_rate"`
+	MinSpanMinutes int     `json:"min_span_minutes"`
 }
+
+// MinSpan is the least time a promoting streak must cover.
+func (t Thresholds) MinSpan() time.Duration { return time.Duration(t.MinSpanMinutes) * time.Minute }
 
 // Defaults for a capability the policy file does not mention.
 const (
 	DefaultPromoteAfter = 20
 	DefaultWindow       = 50
 	DefaultMinRate      = 0.98
+	DefaultMinSpan      = "6h"
 )
 
 // Floors: the least any policy may ask for. A policy file below them is
@@ -45,6 +54,8 @@ const (
 	MinPromoteAfter = 10
 	MinRateFloor    = 0.9
 	MaxWindow       = 1000
+	MinSpanFloor    = time.Hour
+	MaxSpan         = 30 * 24 * time.Hour
 )
 
 // floored raises t to the floors.
@@ -64,17 +75,23 @@ func (t Thresholds) floored() Thresholds {
 	if t.Window < t.PromoteAfter {
 		t.Window = t.PromoteAfter
 	}
+	if floor := int(MinSpanFloor / time.Minute); t.MinSpanMinutes < floor {
+		t.MinSpanMinutes = floor
+	}
 	return t
 }
 
 // DefaultPolicy is the policy for a capability with no entry of its own.
 func DefaultPolicy(id string) Policy {
-	return Policy{ID: id, PromoteAfter: DefaultPromoteAfter, Window: DefaultWindow, MinRate: DefaultMinRate}
+	return Policy{ID: id, PromoteAfter: DefaultPromoteAfter, Window: DefaultWindow, MinRate: DefaultMinRate, MinSpan: DefaultMinSpan}
 }
 
-// Thresholds returns the policy's thresholds, raised to the floors.
+// Thresholds returns the policy's thresholds, raised to the floors. A span
+// that does not parse counts as the floor.
 func (p Policy) Thresholds() Thresholds {
-	return Thresholds{PromoteAfter: p.PromoteAfter, Window: p.Window, MinRate: p.MinRate}.floored()
+	span, _ := time.ParseDuration(p.MinSpan)
+	return Thresholds{PromoteAfter: p.PromoteAfter, Window: p.Window, MinRate: p.MinRate,
+		MinSpanMinutes: int(span / time.Minute)}.floored()
 }
 
 // Resolved fills unset thresholds with the defaults and refuses any below the floors.
@@ -87,6 +104,12 @@ func (p Policy) Resolved() (Policy, error) {
 	}
 	if p.MinRate == 0 {
 		p.MinRate = DefaultMinRate
+	}
+	if p.MinSpan == "" {
+		p.MinSpan = DefaultMinSpan
+	}
+	if span, err := time.ParseDuration(p.MinSpan); err != nil || span < MinSpanFloor || span > MaxSpan {
+		return p, fmt.Errorf("capability %q: min_span is %q; it must be a duration between %s and %s", p.ID, p.MinSpan, MinSpanFloor, MaxSpan)
 	}
 	if p.PromoteAfter < MinPromoteAfter {
 		return p, fmt.Errorf("capability %q: promote_after is %d; the floor is %d", p.ID, p.PromoteAfter, MinPromoteAfter)

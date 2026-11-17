@@ -31,8 +31,11 @@ itself, counts toward promotion. A pass reported with "record" is kept and
 counted as inconclusive. Every failure counts, whoever reports it.
 
 Levels: unproven, advisory, supervised, trusted. Counted passes raise a level
-one step at a time, up to a ceiling the operator sets (advisory by default). A
-counted failure lowers it at once.
+one step at a time, up to a ceiling the operator sets (advisory by default),
+once the streak is long enough, covers enough time (6 hours by default) and no
+machine has an open failure. A counted failure lowers it at once; a failure
+from Axis's checker on a machine blocks promotion until a check on that same
+machine passes.
 
 The record is advisory. No AXIS surface reads a level to allow or refuse an
 action.`,
@@ -115,10 +118,16 @@ func capabilityNext(e capability.Entry) string {
 	switch {
 	case e.AtCeiling:
 		return "at ceiling"
+	case len(e.OpenFailures) > 0:
+		return "blocked: failing on " + strings.Join(e.OpenFailures, ", ")
 	case e.PassesToGo > 0 && e.RateOver > 0 && e.Rate < th.MinRate:
 		return fmt.Sprintf("%s after %d passes and a %.0f%% rate", e.NextLevel, e.PassesToGo, th.MinRate*100)
+	case e.PassesToGo > 0 && !e.EarliestPromotion.IsZero():
+		return fmt.Sprintf("%s in %d passes, not before %s", e.NextLevel, e.PassesToGo, e.EarliestPromotion.Local().Format("Jan 2 15:04"))
 	case e.PassesToGo > 0:
 		return fmt.Sprintf("%s in %d passes", e.NextLevel, e.PassesToGo)
+	case !e.EarliestPromotion.IsZero() && time.Now().Before(e.EarliestPromotion):
+		return fmt.Sprintf("%s after %s", e.NextLevel, e.EarliestPromotion.Local().Format("Jan 2 15:04"))
 	case e.Rate < th.MinRate:
 		return fmt.Sprintf("%s when the rate reaches %.0f%%", e.NextLevel, th.MinRate*100)
 	}
@@ -161,7 +170,13 @@ func printCapabilityEntry(out io.Writer, e capability.Entry) {
 	if !e.Since.IsZero() {
 		fmt.Fprintf(out, "  since      %s\n", e.Since.Format(time.RFC3339))
 	}
-	fmt.Fprintf(out, "  streak     %d consecutive counted passes (a promotion needs %d)\n", e.Streak, th.PromoteAfter)
+	fmt.Fprintf(out, "  streak     %d consecutive counted passes (a promotion needs %d, over at least %s)\n", e.Streak, th.PromoteAfter, th.MinSpan())
+	if !e.StreakSince.IsZero() {
+		fmt.Fprintf(out, "  streak since %s\n", e.StreakSince.Format(time.RFC3339))
+	}
+	if len(e.OpenFailures) > 0 {
+		fmt.Fprintf(out, "  failing    %s (a promotion waits for a passing check on each)\n", strings.Join(e.OpenFailures, ", "))
+	}
 	fmt.Fprintf(out, "  rate       %s (a promotion needs %.0f%% over %d)\n", capabilityRate(e), th.MinRate*100, th.Window)
 	fmt.Fprintf(out, "  totals     %d pass, %d fail, %d inconclusive\n", e.Totals.Pass, e.Totals.Fail, e.Totals.Inconclusive)
 	if e.Recent != "" {
@@ -193,9 +208,10 @@ reads the hardware through system calls. With --node or --all-nodes, it reads
 AXIS's published snapshot for each machine and runs a read-only shell probe on
 it through AXIS's own SSH transport.
 
-A disagreement is a counted failure. A value AXIS did not observe, a machine
-AXIS cannot reach, or a probe that could not run makes the result
-inconclusive.`,
+A disagreement is a counted failure, and it stays open on that machine until a
+check of the same machine passes; while it is open the capability cannot be
+promoted. A value AXIS did not observe, a machine AXIS cannot reach, or a probe
+that could not run makes the result inconclusive.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			run, ok := capabilityCheckers[args[0]]
@@ -266,10 +282,10 @@ func capabilityRecordCmd() *cobra.Command {
 		Short: "Report an observation of a capability from outside Axis",
 		Long: `Report one checked claim about a capability from outside Axis.
 
-A failure counts, whatever evidence it cites. It may be critical (demoting to
-unproven) only when its evidence is a live probe (--evidence-kind live-probe
-with --evidence-ref) or a hashed file (--evidence-kind file with
---evidence-ref and --evidence-sha256).
+A failure counts, whatever evidence it cites, and lowers the level one step.
+It is never critical: only Axis's own checkers can fail critically, because a
+caller can name a probe it never ran or a hash it never computed. To drop a
+capability further at once, lower its ceiling.
 
 A pass is kept in the journal and counted as inconclusive: Axis did not run
 the probe. Passes that count come from Axis's own checkers
@@ -303,8 +319,8 @@ the probe. Passes that count come from Axis's own checkers
 			switch {
 			case obs.Outcome == capability.OutcomePass:
 				fmt.Fprintln(out, "  a pass reported from outside Axis never counts toward promotion; counted passes come from axis capability check")
-			case obs.Severity == capability.SeverityCritical && !capability.Critical(reported):
-				fmt.Fprintln(out, "  marked critical, but the evidence is not a live probe or a hashed file, so it counts as an ordinary failure")
+			case obs.Severity == capability.SeverityCritical:
+				fmt.Fprintln(out, "  reported as critical, but only Axis's own checkers can fail critically, so it counts as one level; lower the ceiling to drop it further")
 			}
 			fmt.Fprintf(out, "level %s, streak %d\n", rec.Level, rec.Streak)
 			if transition != nil {
@@ -317,7 +333,7 @@ the probe. Passes that count come from Axis's own checkers
 	f.StringVar(&obs.Capability, "capability", "", "Capability observed, for example facts.hardware (required)")
 	f.StringVar(&obs.Subject, "subject", "", "What it was performed on, for example node:alpha")
 	f.StringVar(&outcome, "outcome", "", "pass, fail or inconclusive (required)")
-	f.StringVar(&severity, "severity", "normal", "normal or critical; a grounded critical failure demotes to unproven")
+	f.StringVar(&severity, "severity", "normal", "normal or critical; from outside Axis a critical failure still counts as one level")
 	f.StringVar(&obs.Claim, "claim", "", "The claim that was checked")
 	f.StringVar(&obs.Checker, "checker", "", "Who or what made this observation")
 	f.StringVar(&evidenceKind, "evidence-kind", "none", "live-probe, file, peer or none")

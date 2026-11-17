@@ -50,6 +50,10 @@ func useTempAxisHome(t *testing.T) string {
 	// Level changes reach the event log asynchronously, under this home. Flush
 	// before the home is removed, or the write races the cleanup.
 	t.Cleanup(func() { _ = events.FlushEvents(5 * time.Second) })
+	// Each entry an hour after the last, so a streak covers real time.
+	prev, clock := capability.Clock, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	capability.Clock = func() time.Time { clock = clock.Add(time.Hour); return clock }
+	t.Cleanup(func() { capability.Clock = prev })
 	return home
 }
 
@@ -110,7 +114,7 @@ func TestCapabilityFailuresCountFromAnywhere(t *testing.T) {
 	}
 	out, err := runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail", "--severity", "critical",
 		"--evidence-kind", "peer", "--evidence-ref", "an agent saw it fail")
-	if err != nil || !strings.Contains(out, "counted as fail") || !strings.Contains(out, "ordinary failure") || !strings.Contains(out, "demoted: advisory -> unproven") {
+	if err != nil || !strings.Contains(out, "counted as fail") || !strings.Contains(out, "counts as one level") || !strings.Contains(out, "demoted: advisory -> unproven") {
 		t.Fatalf("an outside failure printed %q, %v", out, err)
 	}
 }
@@ -201,7 +205,7 @@ func TestCapabilityShowAndBadInput(t *testing.T) {
 	}
 }
 
-func TestCapabilityRecordWithAHashedFileCanBeCritical(t *testing.T) {
+func TestCapabilityRecordedFailuresAreNeverCritical(t *testing.T) {
 	useTempAxisHome(t)
 	fakeHardware(t, sampleFacts(sampleHardware), nil, sampleHardware, nil)
 	if _, err := runCapability(t, "ceiling", "facts.hardware", "supervised"); err != nil {
@@ -213,14 +217,9 @@ func TestCapabilityRecordWithAHashedFileCanBeCritical(t *testing.T) {
 		}
 	}
 	out, err := runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail", "--severity", "critical",
-		"--evidence-kind", "file", "--evidence-ref", "findings/audit.md", "--evidence-sha256", "be92cb38e3b69b75")
-	if err != nil || !strings.Contains(out, "demoted: supervised -> unproven") || strings.Contains(out, "ordinary failure") {
-		t.Fatalf("a critical failure backed by a hashed file must demote to unproven: %q, %v", out, err)
-	}
-	out, err = runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail", "--severity", "critical",
-		"--evidence-kind", "file", "--evidence-ref", "findings/audit.md")
-	if err != nil || !strings.Contains(out, "ordinary failure") {
-		t.Fatalf("a file with no --evidence-sha256 is not grounded: %q, %v", out, err)
+		"--evidence-kind", "file", "--evidence-ref", "findings/audit.md", "--evidence-sha256", "made-up")
+	if err != nil || !strings.Contains(out, "demoted: supervised -> advisory") || !strings.Contains(out, "counts as one level") {
+		t.Fatalf("an outside critical failure, even with a hash, must demote one level: %q, %v", out, err)
 	}
 }
 

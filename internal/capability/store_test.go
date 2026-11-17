@@ -16,7 +16,7 @@ func newStore(t *testing.T) *Store {
 	t.Helper()
 	s := Open(filepath.Join(t.TempDir(), "capability"))
 	clock := t0
-	s.now = func() time.Time { clock = clock.Add(time.Minute); return clock }
+	s.now = func() time.Time { clock = clock.Add(time.Hour); return clock }
 	return s
 }
 
@@ -78,7 +78,7 @@ func TestCheckerObservationsAreJournaledChainedAndCounted(t *testing.T) {
 		if e.Seq != uint64(i+1) || e.Kind != EntryObservation || e.Observation.Origin != OriginChecker || e.Observation.Counted != OutcomePass {
 			t.Fatalf("entry %d = %+v", i+1, e)
 		}
-		if *e.Thresholds != (Thresholds{10, 20, 0.9}) {
+		if *e.Thresholds != (Thresholds{10, 20, 0.9, 360}) {
 			t.Fatalf("entry %d thresholds = %+v", i+1, e.Thresholds)
 		}
 		wantPrev := ""
@@ -128,6 +128,16 @@ func TestFailuresReportedFromOutsideCount(t *testing.T) {
 		Evidence: Evidence{Kind: EvidencePeer, Ref: "an agent saw it fail"}}, fastPolicy)
 	if err != nil || rec.Level != LevelUnproven || tr == nil || tr.Kind != TransitionDemoted {
 		t.Fatalf("record = %+v, transition %+v, %v", rec, tr, err)
+	}
+}
+
+func TestTheStoreStampsTheTime(t *testing.T) {
+	s := newStore(t)
+	o := checked(OutcomePass)
+	o.At = t0.Add(-365 * 24 * time.Hour) // a caller trying to backdate
+	rec, _, err := s.RecordCheck(o, fastPolicy)
+	if err != nil || !rec.LastObserved.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("the store must stamp the time, got %v (%v)", rec.LastObserved, err)
 	}
 }
 

@@ -136,6 +136,13 @@ func TestCapabilityCheckAcrossNodes(t *testing.T) {
 	if err != nil || json.Unmarshal([]byte(out), &e) != nil || e.Totals.Pass != 2 {
 		t.Fatalf("show after two node passes = %q, %v", out, err)
 	}
+	out, err = runCapability(t, "check", "facts.hardware", "--node", "ALPHA", "--format", "json")
+	var spelled []struct {
+		Observation capability.Observation `json:"observation"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &spelled) != nil || len(spelled) != 1 || spelled[0].Observation.Subject != "node:alpha" {
+		t.Fatalf("a node named ALPHA must be recorded in the snapshot's spelling: %q, %v", out, err)
+	}
 	if _, err := runCapability(t, "check", "facts.hardware", "--all-nodes", "--except", "alpha,beta,gamma"); err == nil {
 		t.Fatal("excluding every node must be an error, not a silent no-op")
 	}

@@ -8,11 +8,15 @@
 //     (`axis capability check`) from grounded evidence: a live probe it ran,
 //     or a file it hashed. A pass reported from outside (`axis capability
 //     record`) is kept in the journal and counted as inconclusive.
-//   - Every failure counts, whoever reports it and whatever it cites. Only a
-//     failure with grounded evidence may be critical.
+//   - Every failure counts, whoever reports it and whatever it cites.
 //
 // Counted passes raise a capability one level at a time, up to a ceiling the
-// operator sets. A counted failure lowers it at once.
+// operator sets, once the streak is long enough, covers enough time (6 hours
+// by default, never under 1) and no machine has an open failure: a failure
+// from Axis's checker on a machine blocks promotion until a check on that same
+// machine passes. A counted failure lowers the level at once. Only Axis's own
+// checkers can fail critically; the operator drops a level further by
+// lowering the ceiling. The store stamps every entry's time itself.
 //
 // Every observation and ceiling change is an entry in an append-only journal
 // whose lines are chained by SHA-256. The state file is a cache of replaying

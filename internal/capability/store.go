@@ -39,9 +39,12 @@ type Store struct {
 	now func() time.Time
 }
 
+// Clock stamps every observation and ceiling change. Only tests replace it.
+var Clock = func() time.Time { return time.Now().UTC() }
+
 // Open returns a store rooted at dir. Nothing is created until the first write.
 func Open(dir string) *Store {
-	return &Store{dir: dir, now: func() time.Time { return time.Now().UTC() }}
+	return &Store{dir: dir, now: func() time.Time { return Clock() }}
 }
 
 func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
@@ -108,10 +111,10 @@ func (s *Store) commitObservation(obs Observation, policies Policies) (Record, *
 	if err != nil {
 		return Record{}, nil, err
 	}
+	// The store, not the caller, says when an observation happened: a caller
+	// that could backdate observations could fake the span a promotion needs.
 	now := s.now()
-	if obs.At.IsZero() {
-		obs.At = now
-	}
+	obs.At = now
 	obs.Counted = Counted(obs)
 	th := policies.For(obs.Capability).Thresholds()
 	trs, err := s.commit(&st, JournalEntry{Kind: EntryObservation, Observation: &obs, Thresholds: &th}, caught, now)
@@ -452,13 +455,16 @@ func compareStates(st, replay State) []string {
 // thresholds it is judged against.
 type Entry struct {
 	Record
-	Rate        float64 `json:"rate"`
-	RateOver    int     `json:"rate_over"`
-	Policy      Policy  `json:"policy"`
-	NextLevel   Level   `json:"next_level,omitempty"`
-	PassesToGo  int     `json:"passes_to_go,omitempty"`
-	AtCeiling   bool    `json:"at_ceiling"`
-	Description string  `json:"description,omitempty"`
+	Rate       float64 `json:"rate"`
+	RateOver   int     `json:"rate_over"`
+	Policy     Policy  `json:"policy"`
+	NextLevel  Level   `json:"next_level,omitempty"`
+	PassesToGo int     `json:"passes_to_go,omitempty"`
+	// EarliestPromotion is when the current streak will have covered the span
+	// a promotion needs.
+	EarliestPromotion time.Time `json:"earliest_promotion,omitzero"`
+	AtCeiling         bool      `json:"at_ceiling"`
+	Description       string    `json:"description,omitempty"`
 }
 
 // Report is the whole record as shown to a reader or exported for a page.
@@ -505,8 +511,12 @@ func entryFor(rec Record, pol Policy) Entry {
 	e.AtCeiling = rec.Level.Rank() >= rec.Ceiling.Rank()
 	if !e.AtCeiling {
 		e.NextLevel = levelAt(rec.Level.Rank() + 1)
-		if left := pol.Thresholds().PromoteAfter - rec.Streak; left > 0 {
+		th := pol.Thresholds()
+		if left := th.PromoteAfter - rec.Streak; left > 0 {
 			e.PassesToGo = left
+		}
+		if rec.Streak > 0 {
+			e.EarliestPromotion = rec.StreakSince.Add(th.MinSpan())
 		}
 	}
 	return e

@@ -180,8 +180,13 @@ type Record struct {
 	Since      time.Time `json:"since"`
 	// Streak is the run of consecutive counted passes since the last failure
 	// or level change.
-	Streak int    `json:"streak"`
-	Totals Totals `json:"totals"`
+	Streak int `json:"streak"`
+	// StreakSince is when the current streak's first pass was observed.
+	StreakSince time.Time `json:"streak_since,omitzero"`
+	// OpenFailures are the subjects whose latest check by Axis's own checker
+	// failed. While any is open the capability cannot be promoted.
+	OpenFailures []string `json:"open_failures,omitempty"`
+	Totals       Totals   `json:"totals"`
 	// Recent holds the newest counted outcomes, oldest first: 'p' or 'f'.
 	Recent         string      `json:"recent"`
 	LastObserved   time.Time   `json:"last_observed,omitzero"`
