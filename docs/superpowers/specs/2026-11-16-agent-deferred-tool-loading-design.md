@@ -177,3 +177,98 @@ Verdict: approve-with-changes
 
 Questions:
 - Does live llama.cpp / vLLM prefix KV-cache reuse hold across real multi-round tool_search -> tool_call runs with axis agent? open: shared cluster and inference servers are out of scope for offline preflight (TestDeferredTools_KVCacheDefsAndSystemPrefixByteStable proves byte-identical tools[] JSON and msgs[0]; live server timing probe would confirm backend cache hits).
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred
+Model: OpenAI GPT
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: 25dcb1f80f27fc98e3051d2c42b1add71ca2129f
+Date: 2026-11-16
+Verdict: revise
+
+1. [major] The name-only deferred catalog fallback exceeded its promised 2400-byte bound with larger tool sets; fixed in b4e7844ddd0c2958cea19f822bc26487aea52611 (bound the sorted prefix including its omission notice and keep omitted tools searchable).
+2. [minor] A minimum 128-byte schema chunk could exceed the result cap when server or tool metadata was large, allowing Conversation truncation; fixed in b4e7844ddd0c2958cea19f822bc26487aea52611 (return a bounded metadata failure when a complete chunk cannot fit).
+
+Note: Original revise verdict retained. Failing-first catalog and metadata regressions passed after the fixes.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_fixed
+Model: OpenAI GPT
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: b4e7844ddd0c2958cea19f822bc26487aea52611
+Date: 2026-11-16
+Verdict: revise
+
+1. [major] A multi-tool oversized-entry notice repeated long identifying metadata and exceeded the 2048-byte cap; fixed in 3da5d79bb94d05a471b42a2721325065f6d98e41 (use the bounded metadata failure while preserving list continuation guidance).
+2. [minor] Current-state documentation omitted default MCP deferral and the eager-tools/no-defer-tools flags; fixed in 3da5d79bb94d05a471b42a2721325065f6d98e41 (document CLI, console and TUI wiring and flag precedence).
+
+Note: Original revise verdict retained. The multi-tool metadata regression failed before the fix and passed afterward.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_final_a
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: 5b34cc07b7570544c75e9e9b339f30b0e267454a
+Date: 2026-11-16
+Verdict: revise
+
+1. [major] Property pagination decoded schema numbers through float64 and rounded the integer enum 9007199254740993; fixed in ca878cfa692151e5c14f18ca1444fd0598ee8f5f (use Decoder.UseNumber and verify exact numeric values across advertised pages).
+2. [major] An oversized first keyword match switched the entire multi-tool result to that schema's pages and hid later matches absent from the bounded catalog; fixed in ca878cfa692151e5c14f18ca1444fd0598ee8f5f (retain matched-tool list pagination with a separate exact-name schema continuation).
+
+Note: Original revise verdict retained. Exact-number and later-match reachability regressions failed before the fixes and passed afterward.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_final_b
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: 5b34cc07b7570544c75e9e9b339f30b0e267454a
+Date: 2026-11-16
+Verdict: revise
+
+1. [major] Following an advertised noisy-query continuation with select-only arguments changed chunk offsets and property batches when query notes disappeared, losing schema bytes and properties; fixed in ca878cfa692151e5c14f18ca1444fd0598ee8f5f (make page boundaries independent of optional notes and fit notes after the body and mandatory footer).
+
+Note: Original revise verdict retained. Regressions follow the actual printed continuations and reconstruct all chunk bytes and property names.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_invariants_a
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: ca878cfa692151e5c14f18ca1444fd0598ee8f5f
+Date: 2026-11-17
+Verdict: revise
+
+1. [major] Property pagination filtered out valid required names absent from properties, and the bounded summary hid the remaining copy; fixed in b2994c4441889c3a9cb761f21196f7ab8d0faeb1 (decline property splitting for these schemas and use the existing lossless chunk fallback).
+
+Note: Original revise verdict retained. RegisterMCPTools regressions reconstruct every original schema byte through actual continuations with plain and noisy queries.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_invariants_b
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: ca878cfa692151e5c14f18ca1444fd0598ee8f5f
+Date: 2026-11-17
+Verdict: revise
+
+1. [major] A valid MCP schema with required names outside properties lost those constraints across all advertised property pages because the required-name summary was truncated; fixed in b2994c4441889c3a9cb761f21196f7ab8d0faeb1 (preserve the original schema in lossless chunks whenever any required name lacks a properties entry).
+
+Note: Original revise verdict retained. Failing-first regressions cover mixed declared/undeclared required names and undeclared-only required names, preserving constraints and numeric lexemes exactly.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_lossless_a
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: b2994c4441889c3a9cb761f21196f7ab8d0faeb1
+Date: 2026-11-17
+Verdict: approve
+
+Note: Reviewed the full diff against this spec with no findings or questions. Agent, chat and CLI suites and local gates passed with pinned Go 1.26.11. The live release lookup in the repository-truth gate was DNS-blocked in the reviewer sandbox; the final integrated candidate still requires the full preflight. The earlier live backend KV-cache question remains open.
+
+Kind: diff
+Reviewer: fresh-context Codex subagent review_deferred_lossless_b
+Model: OpenAI GPT
+Base: 8578cb2a00e85008d3dd95935bbf201e42a4ca6d
+Head: b2994c4441889c3a9cb761f21196f7ab8d0faeb1
+Date: 2026-11-17
+Verdict: approve
+
+Note: Independently reviewed the full diff against this spec with no findings or questions. Agent, chat and CLI suites and local gates passed with the directly installed Go toolchain. The live release lookup in the repository-truth gate was DNS-blocked in the reviewer sandbox; the final integrated candidate still requires the full preflight. Both final reviewers used the OpenAI GPT vendor family. The earlier live backend KV-cache question remains open.
