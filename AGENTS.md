@@ -81,10 +81,10 @@ Layer 1  Fact Plane  internal/facts internal/discovery internal/mesh internal/tr
 Support              internal/config internal/models internal/buildinfo internal/ui internal/persist
                      internal/repairs internal/turboexec internal/auth internal/failures internal/fleettest
                      internal/git internal/lockutil internal/netutil internal/secrets internal/versioncmp
-                     internal/state internal/events
+                     internal/state internal/events internal/capability
 ```
 
-`cmd/axis/` — Cobra CLI, one file per subcommand (29 commands).
+`cmd/axis/` — Cobra CLI, one file per subcommand (30 commands).
 `internal/transport` is SSH; host-key verification must stay on.
 `internal/mcp`: 21 tools (18 read-only diagnostics + 3 advisory lease primitives); list in `docs/runbooks/mcp-network-tools.md`.
 
@@ -106,7 +106,7 @@ diagnostic only, never the sort key (`docs/decisions/placement-selection-contrac
 allocatable RAM → empirical observation → resident model locality → preferred backend → GPU score →
 effective headroom → TurboQuant → unified memory → pressure → model warmth → reservation ratio/share → node name.
 
-## 5. CLI (29 top-level commands registered in `cmd/axis/main.go`)
+## 5. CLI (30 top-level commands registered in `cmd/axis/main.go`)
 
 | Command | Purpose |
 | --- | --- |
@@ -138,6 +138,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | `axis init` | Configuration wizard |
 | `axis mesh` | `status`, `peers` |
 | `axis observations` | Execution observations |
+| `axis capability` | Evidence-backed capability record: list, show, check, record, ceiling, verify, export |
 | `axis tui` | Full-screen workspace: embedded agent console, cluster sidebar, dashboard (`--dashboard` alone) |
 
 Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrConfigLoad` ·
