@@ -1,5 +1,5 @@
-// Package reservation is EXPERIMENTAL — double-entry reservation ledger for cluster RAM and VRAM.
-// Not wired into the stable operator path.
+// Package reservation implements a double-entry reservation ledger for node RAM and VRAM.
+// Persisted on disk and wired into the daemon, guarded execution, snapshot overlays, and CLI.
 
 // Integration: The daemon holds the Ledger. Placement consults it for
 // allocatable headroom. Execution creates/releases entries via the Ledger API.

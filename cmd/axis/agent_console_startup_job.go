@@ -364,6 +364,7 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 		RuntimeLoader:           j.loader,
 		SessionLog:              sessionLog,
 	}))
+	a.SetConsultResolver(consultModelResolver(j.loader))
 	if j.in.resume {
 		if n, err := resumeConversation(a, j.historyPath, sessionLog); err != nil {
 			j.note(console.StatusFailed, fmt.Sprintf("could not resume conversation: %v", err))

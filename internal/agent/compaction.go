@@ -177,13 +177,14 @@ func hasUserRole(msgs []chat.Message) bool {
 
 // summarizeViaBackend runs a single no-tools, non-streamed exchange against the
 // active backend to produce a summary. Output is discarded from the user's
-// stream so compaction is invisible.
+// stream so compaction is invisible, and thinking is disabled on compatible
+// backends so reasoning models return the summary directly in content.
 func (a *Agent) summarizeViaBackend(ctx context.Context, backend ChatBackend, prompt string) (string, error) {
 	msgs := []chat.Message{
 		{Role: chat.RoleSystem, Content: "You are a conversation summarizer. Output only the summary, no preamble."},
 		{Role: chat.RoleUser, Content: prompt},
 	}
-	resp, err := backend.ChatStream(ctx, msgs, nil, io.Discard)
+	resp, err := backend.ChatStream(WithDisableThinking(ctx), msgs, nil, io.Discard)
 	if err != nil {
 		return "", err
 	}

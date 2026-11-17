@@ -493,6 +493,10 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 	if strings.TrimSpace(a0.Command) == "" {
 		return "", fmt.Errorf("fleet_exec requires a non-empty \"command\" argument")
 	}
+	runNode := a.nodeRunner()
+	if runNode == nil {
+		return "", fmt.Errorf("fleet_exec runner not configured; fleet commands must use guarded execution")
+	}
 
 	a.dispatchMu.Lock()
 	if a.blockAll {
@@ -606,13 +610,7 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 			nodeCtx, nodeCancel := context.WithTimeout(ctx, timeout)
 			defer nodeCancel()
 
-			var out string
-			var err error
-			if runNode := a.nodeRunner(); runNode != nil {
-				out, err = runNode(nodeCtx, name, a0.Command)
-			} else {
-				out, err = runRemote(nodeCtx, a.toolContext, name, a0.Command)
-			}
+			out, err := runNode(nodeCtx, name, a0.Command)
 			results[idx] = nodeResult{node: name, output: strings.TrimSpace(out), err: err}
 		}(i, nodeName)
 	}

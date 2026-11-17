@@ -9,6 +9,13 @@
 // applied once, at the end, by Paint. Keeping ANSI out of the layout path
 // means wrapping arithmetic operates on exactly the characters the terminal
 // will show, and golden tests assert on text rather than on color state.
+//
+// Stream producers (NewStreamWriter and Bridge) capture a monotonic TurnID so
+// late output from a settled or abandoned turn is dropped by Model.stale (while
+// TurnID == 0 marks turn-independent notices). Model reasoning arrives either
+// inline via <think>...</think> spans parsed across rounds or out of band via
+// agent.ThoughtWriter and ThoughtChunkMsg, preventing literal </think> leakage
+// and keeping cumulative per-turn thinking durations accurate.
 package console
 
 import (

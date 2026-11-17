@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.24.2`
+- Repo version: `0.25.0`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -92,7 +92,7 @@ The live repo currently contains:
 - Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed; when a non-empty model name is known, observation scopes are keyed per model so different models on the same node accumulate independent empirical histories, and when no model name is known they intentionally fall back to the legacy non-model key for backward compatibility
 - Hard empirical filter in placement: nodes whose freshly-observed `ObservedRSSMB` exceeds current allocatable RAM are excluded from `FilterCandidates` before ranking begins
 - `axis status` renders a RESIDENT MODELS table showing which models are live on each node, grouped by runtime (ollama, llama.cpp, mlx, apple-foundation-models), with stable canonical ordering and `+N more` truncation for wide lists
-- `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
+- `axis doctor` probes local AI backends (llama-server and MLX) and configured `~/.axis/ai.yaml` HTTP backends as advisory checks; skipped ai.yaml probes (overall budget spent) warn without a repair Fix; probe errors surface stderr for actionability without blocking core SSH/config checks
 - `axis doctor` reports daemon ownership observationally: duplicate daemons serving one address (`fail`), a daemon running a deleted executable inode (`fail`), a daemon not started by its own systemd service, judged from its cgroup (`warn`, Linux), socket state at `api.DefaultAddr()` — live, stale file, non-socket squatter, missing, and whether the `<addr>.lock` guard is held — and mesh UDP port contention (`warn`). Doctor never kills a process, unlinks a socket, or takes the ownership lock
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
@@ -107,6 +107,7 @@ The live repo currently contains:
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 - Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
 - `axis agent` asks before every external MCP tool call, in every autonomy mode and with `--auto-approve`, unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
+- `axis agent` offers `consult_model` in observe, edit, and exec when it installed a seat resolver; a registry with no resolver, including a child agent, does not advertise it, and installing the resolver refreshes the stored tool list. One call asks one configured model, by the same id or name `/model` already lists, and returns that text. The driver model stays in place. The seat receives no tools. A seat on another node is reached through the listed address, the node name, or an SSH tunnel that closes when the consult ends, and the driver's tunnel is untouched. The first call asks the operator, including under edit, full, and `--auto-approve`; an always answer covers later calls that see it, and two calls dispatched together may both ask. A call waiting for the same seat returns `context.Canceled` when its context ends. Cluster scope does not offer the tool. An unknown, disabled, empty, or ambiguous seat is an error that names the seat and does not tell the driver to pull a model. A reached Ollama seat does not start the daemon. A seat error that contains pull or `ollama serve` is reported as not answering and does not contain that text. The driver client still auto-starts
 - Under `--autonomy full`, `axis agent` still asks before a shell command or `axis_run_task` that a specific safety rule flags (safety rules marked `AskAlways`: git push, curl/wget uploads, service start/stop, `ollama run`/`pull`, SSH with host-key checking off, git or file changes inside `node_modules`); they score 75, and guarded-execution results carry `dumb_score` 75 and the rule's reason in `block_reason` (not blocked) for them; the MCP `verify_execution_safety` `matched_rule` names that rule. Git rules see the subcommand after git's global options (`git -C <repo> push` asks). Unknown commands keep auto-approving, and command wrappers (`env`, `sh -c`, …) are not looked through
 - `axis agent` appends private, bounded daily JSONL session logs beneath `~/.axis/logs` for interactive and one-shot runs. Logging failures do not fail a turn, and one-shot runs do not overwrite `agent-history.json`; only the interactive REPL/console saves the resume file. See `docs/runbooks/agent-session-logs.md` for captured fields, redaction, retention and storage limits.
 
@@ -143,7 +144,7 @@ Top-level commands currently registered in the binary:
 | `axis cluster` | Fleet snapshot | `status` (cache-first for 5 minutes; `--live` sweeps), `summary` |
 | `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
 
-| `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
+| `axis cortex` | Optional MCP client for a coordination service | Subcommands: `events`, `recall`, `status`; dials `AXIS_CORTEX_URL` or a role: cortex node |
 | `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
 | `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |
 | `axis serve` | Start local HTTP API | Includes execution surface |
@@ -151,7 +152,7 @@ Top-level commands currently registered in the binary:
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
-| `axis doctor` | Validate config, SSH, daemon health/ownership, and local AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, whether a service supervises the daemon, socket ownership, mesh UDP contention, and whether the user service starts at boot or only at login; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
+| `axis doctor` | Validate config, SSH, daemon health/ownership, and AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, whether a service supervises the daemon, socket ownership, mesh UDP contention, and whether the user service starts at boot or only at login; probes llama-server, MLX, and configured ai.yaml HTTP backends as advisory checks; `--strict` promotes daemon failure to core |
 | `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map
@@ -189,7 +190,7 @@ Top-level commands currently registered in the binary:
 | `internal/reservation` | Double-entry reservation ledger | Live authority for guarded execution reserve/release, snapshot overlays, `axis reservations` list/inspect/release/doctor, and the `/v2/reservations` CRUD/heartbeat API |
 | `internal/workload` | Workload profile matching | Powers `axis profile match`; deterministic class inference for 8 workload classes |
 | `internal/llmrouter` | Hybrid AI model routing | Powers `axis ai backends|roles|route`; local/cloud provider registry with semantic reflex classification |
-| `internal/cortex` | MCP client for cluster brain | Powers `axis cortex`; FastMCP 3.x Streamable HTTP protocol |
+| `internal/cortex` | Optional MCP client for a coordination service | Powers `axis cortex`; FastMCP 3.x Streamable HTTP; no server in-tree |
 
 ## Verification Snapshot
 
@@ -206,7 +207,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
     - `coverage gate passed: internal/api 73.3% >= 65.0%`
     - `coverage gate passed: internal/mcp 85.9% >= 70.0%`
     - `coverage gate passed: internal/ui 91.5% >= 80.0%`
-    - `coverage gate passed: total 77.9% >= 65.0%`
+    - `coverage gate passed: total 78.8% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix

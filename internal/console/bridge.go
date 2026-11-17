@@ -48,11 +48,14 @@ type streamWriter struct {
 	to   sender
 	turn TurnID
 
-	mu      sync.Mutex
-	pending []byte
-	timer   *time.Timer
-	closed  bool
+	mu        sync.Mutex
+	pending   []byte
+	timer     *time.Timer
+	inThought bool
+	closed    bool
 }
+
+var _ agent.ThoughtWriter = (*streamWriter)(nil)
 
 // NewStreamWriter returns the writer to install as the agent's output sink for
 // one turn. The turn id is captured here and never re-read, so a writer whose
@@ -74,16 +77,63 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 	if w.closed {
 		return len(p), nil
 	}
+	w.closeThoughtLocked()
+	w.enqueueLocked(p)
+	return len(p), nil
+}
 
+// WriteThought emits out-of-band reasoning tokens via ThoughtChunkMsg so the
+// console's live thinking spinner and collapsed transcript entry work cleanly
+// even if the reasoning text contains literal </think> tokens.
+func (w *streamWriter) WriteThought(thought string) {
+	if thought == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	if len(w.pending) > 0 {
+		w.flushLocked(true)
+	}
+	w.inThought = true
+	if w.to != nil {
+		w.to.Send(ThoughtChunkMsg{Turn: w.turn, Text: thought})
+	}
+}
+
+// CloseThought finishes the active out-of-band reasoning span cleanly.
+func (w *streamWriter) CloseThought() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	w.closeThoughtLocked()
+}
+
+func (w *streamWriter) closeThoughtLocked() {
+	if !w.inThought {
+		return
+	}
+	w.inThought = false
+	if w.to != nil {
+		w.to.Send(ThoughtChunkMsg{Turn: w.turn, Done: true})
+	}
+}
+
+// enqueueLocked appends p to pending and triggers/schedules a flush.
+// Caller must hold w.mu.
+func (w *streamWriter) enqueueLocked(p []byte) {
 	w.pending = append(w.pending, p...)
 	if len(w.pending) >= maxPendingBytes {
 		w.flushLocked(false)
-		return len(p), nil
+		return
 	}
 	if w.timer == nil {
 		w.timer = time.AfterFunc(flushInterval, w.onTimer)
 	}
-	return len(p), nil
 }
 
 // Close flushes any buffered text, including a trailing partial rune, and
@@ -91,6 +141,10 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 func (w *streamWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closeThoughtLocked()
 	w.closed = true
 	w.flushLocked(true)
 	return nil

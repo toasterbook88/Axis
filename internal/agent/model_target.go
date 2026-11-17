@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
 )
@@ -42,11 +43,13 @@ type ModelTarget struct {
 	ContextWindow   int      // served context in tokens, as the runtime stated it; 0 = unknown
 }
 
-// CloudBackendOptions supplies cloud-only credentials when ProtocolCloud.
+// CloudBackendOptions supplies cloud credentials and optional stream/reasoning overrides.
 type CloudBackendOptions struct {
-	ProviderKind string // openrouter, groq, anthropic, ...
-	APIKey       string
-	CostPer1K    float64
+	ProviderKind      string // openrouter, groq, anthropic, ...
+	APIKey            string
+	CostPer1K         float64
+	StreamIdleTimeout time.Duration // 0 keeps default; <0 disables idle stream timer
+	Thinking          *bool         // nil keeps backend default; non-nil toggles chat_template_kwargs.enable_thinking
 }
 
 // BuildBackend constructs the ChatBackend for target. For ProtocolCloud, opts
@@ -76,7 +79,12 @@ func BuildBackend(target ModelTarget, opts CloudBackendOptions) (ChatBackend, er
 		if endpoint == "" {
 			return nil, fmt.Errorf("openai-compatible model %q has empty endpoint", target.Model)
 		}
-		return NewOpenAICompatibleBackend(endpoint, target.Model, opts.APIKey)
+		b, err := NewOpenAICompatibleBackend(endpoint, target.Model, opts.APIKey)
+		if err != nil {
+			return nil, err
+		}
+		b.applyOptions(opts)
+		return b, nil
 
 	case ProtocolCloud:
 		if strings.TrimSpace(opts.APIKey) == "" {
@@ -86,7 +94,12 @@ func BuildBackend(target ModelTarget, opts CloudBackendOptions) (ChatBackend, er
 		if kind == "" {
 			kind = target.ProviderName
 		}
-		return NewCloudBackendWithKey(kind, target.ProviderName, target.Endpoint, opts.APIKey, target.Model, opts.CostPer1K)
+		b, err := NewCloudBackendWithKey(kind, target.ProviderName, target.Endpoint, opts.APIKey, target.Model, opts.CostPer1K)
+		if err != nil {
+			return nil, err
+		}
+		b.applyOptions(opts)
+		return b, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported model protocol %q for %q", target.Protocol, target.Model)

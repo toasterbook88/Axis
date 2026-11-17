@@ -95,6 +95,10 @@ func pipedConfirm(w io.Writer) agent.ConfirmFunc {
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and a specific safety rule flagged it (run interactively to approve)\n", tool)
 			return agent.ConfirmNo
 		}
+		if tool == "consult_model" {
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session (consult_model still asks under --autonomy full and --auto-approve; run interactively)\n", tool)
+			return agent.ConfirmNo
+		}
 		fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
 		return agent.ConfirmNo
 	}

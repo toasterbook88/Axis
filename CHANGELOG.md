@@ -1,7 +1,26 @@
-## Unreleased
+## v0.25.0 (2026-11-16)
+
+`axis agent` can consult a second model and cloud streams fail fast when idle;
+desk leases fail closed, and A2A refuses synthesized terminal reports.
+
+### Documentation
+
+* Clarify that `axis cortex` / `internal/cortex` is an optional MCP *client*
+  only: Axis does not ship or run a Cortex server. Help text and package docs
+  no longer describe the service as living on a particular host.
+  `hack/verify-public-boundary.sh` fails on phrasing that reclaims a host-bound
+  Cortex server in the public tree.
 
 ### Fixes
 
+* `axis version` compares the daemon and CLI commits by prefix, so a release
+  binary's seven-character short commit and a local build's eight-character one
+  no longer produce a false "differs" warning for the same revision (#641).
+* `ProbeAllBackendsForNodes` gives each backend its own probe timeout and marks
+  backends `Skipped` when the caller's overall budget is already spent, so a
+  slow earlier backend cannot cancel later probes or look like an observed
+  failure. `axis doctor` AI Config rows for skipped backends warn without a
+  repair Fix.
 * Tool version parsing no longer keeps a trailing `)` or a distro package
   suffix when a clean version is also on the line. `gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
   now reports `11.4.0`, not `11.4.0-1ubuntu1~22.04)`.
@@ -30,6 +49,28 @@
   will not restart after a crash or start after a reboot. It passes for a
   daemon in a service whose name contains `axis`, and reports nothing when the
   cgroup is unreadable or hidden by a container. Read-only.
+* Cloud agent streams no longer abort at a fixed 120 seconds. `CloudBackend`
+  follows the command's `--timeout`/context and uses a 120-second idle guard:
+  a healthy slow stream keeps going, and a stalled one fails fast with
+  `stream idle timeout`. Separate reasoning deltas from OpenAI-compatible and
+  Anthropic endpoints appear as thinking in the console instead of being
+  dropped, thinking spans across rounds accumulate their durations, and
+  compaction asks for a non-thinking summary where the server supports it
+  (#643).
+* `axis agent` gains `consult_model`: one call asks another configured model
+  from the `/model` list for text and returns it, while the driver model,
+  backend, and tool list stay in place. The seat receives one user message and
+  no tools; the first call asks the operator in every mode; the tool is hidden
+  in cluster scope and in child agents; a remote seat is reached through the
+  same address, node-name, and SSH-tunnel fallback as `/model`, and that tunnel
+  closes when the call ends (#651).
+* `axis agent --desk-lease` fails closed before cluster discovery when the
+  caller's lease is missing, unloaded, ended, asleep, busy, or stale, exiting
+  non-zero with that refusal name (#640).
+* A2A `message:send` refuses a caller-reported terminal state (`completed`,
+  `failed`, `rejected`, `approved`) with 400 and stores nothing, and an empty
+  sub-agent answer is an error instead of a synthesized success sentence
+  (#646).
 
 ## v0.24.2 (2026-11-10)
 

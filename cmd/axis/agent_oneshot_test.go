@@ -135,8 +135,25 @@ func TestPipedConfirmNamesSpecificSafetyRule(t *testing.T) {
 }
 
 func TestAgentSafetyLabelFullNamesSpecificRisks(t *testing.T) {
-	if got := agentSafetyLabel(false, "full"); !strings.Contains(got, "specific safety risks") {
-		t.Fatalf("full-autonomy banner %q does not mention specific safety risks", got)
+	if got := agentSafetyLabel(false, "full"); !strings.Contains(got, "specific safety risks") || !strings.Contains(got, "consult_model") {
+		t.Fatalf("full-autonomy banner %q does not mention specific safety risks and consult_model", got)
+	}
+	if got := agentSafetyLabel(true, ""); !strings.Contains(got, "Auto-Approve safe") || !strings.Contains(got, "consult_model still asks") {
+		t.Fatalf("auto-approve banner %q does not say consult_model still asks", got)
+	}
+}
+
+func TestPipedConfirmConsultStillAsks(t *testing.T) {
+	var buf bytes.Buffer
+	if pipedConfirm(&buf)("consult_model", "ask seat-a", 0) != agent.ConfirmNo {
+		t.Fatal("piped consult must deny")
+	}
+	got := buf.String()
+	if !strings.Contains(got, "consult_model still asks") || !strings.Contains(got, "run interactively") {
+		t.Fatalf("consult notice = %q", got)
+	}
+	if strings.Contains(got, "pass --autonomy full") {
+		t.Fatalf("consult notice offers a flag that does not clear it: %q", got)
 	}
 }
 

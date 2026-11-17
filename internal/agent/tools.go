@@ -53,6 +53,9 @@ type ToolRegistry struct {
 	// resultCapBytes mirrors Conversation's RoleTool byte cap so tool_search
 	// returns complete or cleanly paginated schemas without mid-JSON truncation.
 	resultCapBytes int
+	// consultResolver resolves consult_model's seat argument. Nil means the
+	// tool returns an error and does not call a backend.
+	consultResolver ConsultResolver
 }
 
 // mcpAutoApprovedTool reports whether name is an external MCP tool the
@@ -103,6 +106,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerBackgroundTools()
 	r.registerSessionBranchTools()
 	r.registerDeferredBridgeTools()
+	r.registerConsultModel()
 	return r
 }
 
@@ -172,6 +176,12 @@ func (r *ToolRegistry) extraVisible(name string) bool {
 
 func (r *ToolRegistry) callableNonBridge(name string) bool {
 	if r == nil || name == "" || neverTool(name) || name == "axis_summary" || isBridgeTool(name) {
+		return false
+	}
+	// A registry with no resolver cannot reach a seat. Advertise the tool
+	// only where the command wired one, so a child or library caller never
+	// sees a tool whose every call would fail.
+	if name == consultModelTool && r.consultResolver == nil {
 		return false
 	}
 	if execTool(name) && r.scope != ScopeExec {

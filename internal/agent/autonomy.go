@@ -21,9 +21,9 @@ const (
 	AutonomyEdit AutonomyMode = "edit"
 	// AutonomyFull auto-approves everything except safety-gate-blocked commands
 	// (score >= 80), commands a specific safety rule flags (an AskAlways
-	// prompt, score 75), and external MCP tools missing from the exact
-	// auto_approve_tools allowlist. Unknown commands keep auto-approving. Use
-	// for unattended / long-running autonomous work.
+	// prompt, score 75), external MCP tools missing from the exact
+	// auto_approve_tools allowlist, and consult_model. Unknown commands keep
+	// auto-approving. Use for unattended / long-running autonomous work.
 	AutonomyFull AutonomyMode = "full"
 	// AutonomyCluster is narrower than default: the model sees only the AXIS
 	// cluster read tools, not workspace files, git, or MCP servers. Use it to
@@ -75,8 +75,9 @@ func autonomyConfirm(mode AutonomyMode, fallback ConfirmFunc) ConfirmFunc {
 		}
 		// External MCP tools reach this policy only when they are not on the
 		// exact auto_approve_tools allowlist. They carry no AXIS safety
-		// score, so no mode may auto-approve them.
-		if isExternalMCPTool(toolName) {
+		// score, so no mode may auto-approve them. consult_model is the
+		// same kind of call: score 0 is not low risk.
+		if isExternalMCPTool(toolName) || consultAsksOperator(toolName) {
 			return fallback(toolName, description, safetyScore)
 		}
 		switch mode {

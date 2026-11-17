@@ -984,6 +984,69 @@ func TestModelThinkingSpanMeasured(t *testing.T) {
 	}
 }
 
+func TestModelMultiRoundThinkingSpanAccumulates(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		Now:    func() time.Time { return now },
+	})
+	m = startTurnFor(t, m)
+
+	now = base.Add(1 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>round 1"})
+	now = base.Add(4 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>"}) // +3s
+	now = base.Add(6 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>round 2"})
+	now = base.Add(7 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>answer"}) // +1s
+
+	if got := m.thinkingElapsed(); got != 4*time.Second {
+		t.Fatalf("multi-round thinkingElapsed() = %s, want 4s (3s + 1s)", got)
+	}
+
+	m = apply(m, TurnDoneMsg{Turn: 1})
+	if m.lastThought != "round 1\n\nround 2" {
+		t.Fatalf("retained thought = %q, want %q", m.lastThought, "round 1\n\nround 2")
+	}
+	if m.thinkingElapsed() != 0 {
+		t.Fatal("finished turn must reset accumulated thinking elapsed")
+	}
+}
+
+func TestModelOutOfBandThoughtWithLiteralCloseTagStaysOutOfAnswer(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		Now:    func() time.Time { return now },
+	})
+	m = startTurnFor(t, m)
+
+	now = base.Add(1 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Text: "inspect </think> handling"})
+	now = base.Add(3 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Done: true})
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "All clear."})
+
+	updated, out := m.Update(TurnDoneMsg{Turn: 1})
+	done := updated.(Model)
+	if done.lastThought != "inspect </think> handling" {
+		t.Fatalf("lastThought = %q, want verbatim thought including </think>", done.lastThought)
+	}
+	rendered := strings.Join(printed(out), "\n")
+	if !strings.Contains(rendered, "Thought for 2s") {
+		t.Fatalf("missing accumulated duration header:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "~ inspect </think> handling") {
+		t.Fatalf("thought entry missing verbatim literal </think> text:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "* All clear.") || strings.Contains(rendered, "* inspect") {
+		t.Fatalf("unexpected agent answer output:\n%s", rendered)
+	}
+}
+
 func TestThinkingEntryRendersDuration(t *testing.T) {
 	e := NewThinkingEntry(fixedNow(), "deep reasoning\nspanning\nlines")
 	e.Elapsed = 3100 * time.Millisecond
@@ -1141,5 +1204,87 @@ func TestModelStreamBuilderSurvivesElmCopies(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the second chunk")
+	}
+}
+
+func TestModelThoughtBuilderSurvivesElmCopies(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	first, _ := m.Update(ThoughtChunkMsg{Turn: m.Turn(), Text: "part-one "})
+
+	out := make(chan Model, 1)
+	go func() {
+		second, _ := first.(Model).Update(ThoughtChunkMsg{Turn: m.Turn(), Text: "part-two"})
+		out <- second.(Model)
+	}()
+	select {
+	case second := <-out:
+		if got := fmt.Sprint(second.thoughtBuf); got != "part-one part-two" {
+			t.Fatalf("thoughtBuf lost across Update copies: %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for second ThoughtChunkMsg")
+	}
+}
+
+func TestModelIgnoresStaleTurnThoughtChunkMsg(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: fixedNow})
+	m = startTurnFor(t, m)
+
+	// Mismatched turn ID while turn 1 is active must be ignored.
+	m = apply(m, ThoughtChunkMsg{Turn: 99, Text: "future turn"})
+	if m.inOutOfBandThought || m.inThought || (m.thoughtBuf != nil && m.thoughtBuf.Len() > 0) || !m.thoughtStart.IsZero() {
+		t.Fatalf("mismatched-turn ThoughtChunkMsg mutated state: inOOB=%v inThought=%v start=%v",
+			m.inOutOfBandThought, m.inThought, m.thoughtStart)
+	}
+
+	// Late ThoughtChunkMsg from turn 1 after turn 1 finishes (idle/retired) and during turn 2 must be ignored.
+	m = apply(m, TurnDoneMsg{Turn: 1})
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Text: "late after settle"})
+	m = startTurnFor(t, m)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Text: "late during turn 2"})
+	if m.inOutOfBandThought || m.inThought || (m.thoughtBuf != nil && m.thoughtBuf.Len() > 0) || !m.thoughtStart.IsZero() {
+		t.Fatalf("retired-turn ThoughtChunkMsg mutated state: inOOB=%v inThought=%v start=%v",
+			m.inOutOfBandThought, m.inThought, m.thoughtStart)
+	}
+}
+
+func TestModelMixedOutOfBandAndInlineThoughtCombinesAndResetsAcrossTurns(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		Now:    func() time.Time { return now },
+	})
+	m = startTurnFor(t, m)
+
+	now = base.Add(1 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Text: "oob plan"})
+	now = base.Add(3 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Done: true}) // +2s out-of-band
+	now = base.Add(4 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>inline"}) // enters inline thought
+	now = base.Add(6 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: " check</think>Final"}) // +2s inline -> 4s total
+	now = base.Add(7 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: " reply"})
+
+	updated, out := m.Update(TurnDoneMsg{Turn: 1})
+	done := updated.(Model)
+	if done.lastThought != "oob plan\n\ninline check" {
+		t.Fatalf("lastThought = %q, want %q", done.lastThought, "oob plan\n\ninline check")
+	}
+	rendered := strings.Join(printed(out), "\n")
+	if !strings.Contains(rendered, "Thought for 4s") || !strings.Contains(rendered, "* Final reply") {
+		t.Fatalf("unexpected mixed turn render:\n%s", rendered)
+	}
+
+	// Second turn with no thought must reset buffers/elapsed cleanly.
+	done = startTurnFor(t, done)
+	if done.thoughtBuf != nil && done.thoughtBuf.Len() > 0 {
+		t.Fatalf("thoughtBuf survived into turn 2: %q", done.thoughtBuf.String())
+	}
+	if done.thinkingElapsed() != 0 {
+		t.Fatalf("thinkingElapsed survived into turn 2: %s", done.thinkingElapsed())
 	}
 }
