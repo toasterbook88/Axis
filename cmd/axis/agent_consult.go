@@ -36,10 +36,16 @@ func consultResolver(
 		build = agent.BuildBackend
 	}
 	return func(ctx context.Context, seatRef string) (agent.ChatBackend, string, func(), error) {
+		if err := ctx.Err(); err != nil {
+			return nil, "", nil, err
+		}
 		quoted := strings.TrimSpace(seatRef)
 		var choices []ModelChoice
 		if list != nil {
 			choices = list(ctx)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, "", nil, err
 		}
 		choice, err := findModelTargetByRef(choices, quoted)
 		if err != nil {
@@ -54,11 +60,14 @@ func consultResolver(
 		if loadRT != nil {
 			rt, _ = loadRT(ctx)
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, "", nil, err
+		}
 		routed, tunnel, err := resolveModelRoute(ctx, rt, choice)
 		if err != nil {
 			return nil, "", nil, consultDetail(quoted, err)
 		}
-		opts, err := cloudOptsForTarget(loadRT, &routed)
+		opts, err := cloudOptsForTarget(ctx, loadRT, &routed)
 		if err != nil {
 			if tunnel != nil {
 				tunnel()
@@ -102,5 +111,5 @@ func consultDetail(seat string, err error) error {
 	if err == nil || strings.Contains(strings.ToLower(err.Error()), "pull") {
 		return fmt.Errorf("consult: seat %q is not answering", seat)
 	}
-	return fmt.Errorf("consult: seat %q is not answering: %s", seat, err.Error())
+	return fmt.Errorf("consult: seat %q is not answering: %w", seat, err)
 }
