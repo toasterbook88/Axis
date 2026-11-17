@@ -18,6 +18,7 @@ const (
 
 	defaultToolSearchMaxResults = 5
 	hardToolSearchMaxResults    = 20
+	toolMetadataLimitNotice     = "Tool schema metadata exceeds the output size limit; shorten the MCP server or tool name before retrying."
 
 	// deferredCatalogSummaryLimit caps the byte length of the system-prompt
 	// deferred-tool summary list before falling back to name-only entries so
@@ -577,6 +578,9 @@ func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page in
 	if sel.oversizedIdx >= 0 {
 		name := entries[sel.oversizedIdx].Def.Function.Name
 		primary = fmt.Sprintf("Schema for %s exceeds multi-tool page limit (page %d/%d). Query tool_search(query=\"select:%s\", page=1) to page through its full schema.", name, page, len(pages), name)
+		if len(primary) > bodyBudget {
+			primary = truncateUTF8WithSuffix(toolMetadataLimitNotice, bodyBudget, "…")
+		}
 	} else {
 		selLines := make([]string, len(sel.indices))
 		for k, idx := range sel.indices {
@@ -769,8 +773,7 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 		chunkCap = capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2
 	}
 	if chunkCap < minChunkBytes {
-		const notice = "Tool schema metadata exceeds the output size limit; shorten the MCP server or tool name before retrying."
-		return truncateUTF8WithSuffix(notice, capBytes, "…")
+		return truncateUTF8WithSuffix(toolMetadataLimitNotice, capBytes, "…")
 	}
 
 	chunks := splitUTF8ByMaxBytes(fullLine, chunkCap)

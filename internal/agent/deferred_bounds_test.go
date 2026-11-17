@@ -77,3 +77,54 @@ func TestToolSearch_OversizedMetadataDoesNotTruncate(t *testing.T) {
 		})
 	}
 }
+
+func TestToolSearch_MultiToolOversizedMetadataDoesNotTruncate(t *testing.T) {
+	for _, toolCount := range []int{2, 3} {
+		t.Run(strconv.Itoa(toolCount), func(t *testing.T) {
+			server := strings.Repeat("s", 2000)
+			name := "mcp_" + server + "_lookup"
+			reg := mcpclient.NewRegistry()
+			for _, srv := range []string{"short", server, "tail"}[:toolCount] {
+				reg.Add(&mcpclient.ServerConnection{
+					Name:       srv,
+					InitResult: &mcp.InitializeResult{},
+					Tools:      []mcp.Tool{{Name: "lookup", InputSchema: mcp.ToolInputSchema{Type: "object"}}},
+				})
+			}
+			r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+			r.RegisterMCPTools(reg)
+			r.SetResultCapBytes(2048)
+			query := "select:mcp_short_lookup," + name
+			if toolCount == 3 {
+				query += ",mcp_tail_lookup"
+			}
+			args, _ := json.Marshal(toolSearchArgs{Query: query, Page: 2})
+			out, err := r.Execute(context.Background(), toolSearchName, args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := chat.NewConversation(1024)
+			c.Append(chat.Message{Role: chat.RoleTool, Content: out})
+			if len(out) > 2048 || strings.Contains(c.Messages()[0].Content, "… [truncated:") {
+				t.Fatalf("multi-tool oversized metadata page is %d bytes and must fit the 2048-byte cap", len(out))
+			}
+			if !strings.Contains(out, "metadata exceeds the output size limit") || !strings.Contains(out, fmt.Sprintf("Showing page 2/%d.", toolCount)) {
+				t.Fatalf("oversized metadata page must retain a readable failure and pagination status: %q", out)
+			}
+			if toolCount == 3 {
+				if !strings.Contains(out, "Call tool_search with page=3 for remaining schemas.") || !strings.Contains(out, "mcp_tail_lookup") {
+					t.Fatalf("oversized metadata page lost continuation guidance: %q", out)
+				}
+				args, _ = json.Marshal(toolSearchArgs{Query: query, Page: 3})
+				tail, err := r.Execute(context.Background(), toolSearchName, args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fns := extractFunctionPayloads(t, tail)
+				if len(fns) != 1 || fns[0].Name != "mcp_tail_lookup" {
+					t.Fatalf("next page lost the remaining schema: %q", tail)
+				}
+			}
+		})
+	}
+}
