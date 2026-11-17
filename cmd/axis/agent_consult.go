@@ -36,20 +36,10 @@ func consultResolver(
 		build = agent.BuildBackend
 	}
 	return func(ctx context.Context, seatRef string) (agent.ChatBackend, string, func(), error) {
-		if err := ctx.Err(); err != nil {
-			return nil, "", nil, err
-		}
 		quoted := strings.TrimSpace(seatRef)
-		var choices []ModelChoice
-		if list != nil {
-			choices = list(ctx)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, "", nil, err
-		}
-		choice, err := findModelTargetByRef(choices, quoted)
+		choice, err := findConsultChoice(ctx, list, quoted)
 		if err != nil {
-			return nil, "", nil, consultResolveError(quoted, err)
+			return nil, "", nil, err
 		}
 		// A catalog endpoint is the node's observed address and may not be
 		// reachable from here. Resolve a working route (listed address, node
@@ -92,6 +82,26 @@ func consultResolver(
 		}
 		return backend, routed.ID, tunnel, nil
 	}
+}
+
+// findConsultChoice checks cancellation around catalog loading and keeps lookup
+// errors on the consult path rather than suggesting model or server changes.
+func findConsultChoice(ctx context.Context, list func(context.Context) []ModelChoice, seatRef string) (ModelChoice, error) {
+	if err := ctx.Err(); err != nil {
+		return ModelChoice{}, err
+	}
+	var choices []ModelChoice
+	if list != nil {
+		choices = list(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return ModelChoice{}, err
+	}
+	choice, err := findModelTargetByRef(choices, seatRef)
+	if err != nil {
+		return ModelChoice{}, consultResolveError(seatRef, err)
+	}
+	return choice, nil
 }
 
 // consultResolveError maps findModelTargetByRef. An ambiguous name may list
