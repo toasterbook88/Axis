@@ -599,9 +599,17 @@ func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page in
 	var allRequired []string
 	if reqRaw, hasReq := rawSchema["required"].([]any); hasReq {
 		for _, item := range reqRaw {
-			if s, ok := item.(string); ok && s != "" {
-				allRequired = append(allRequired, s)
+			s, ok := item.(string)
+			if !ok {
+				return "", false
 			}
+			// Required names need not be declared in properties. Such names
+			// cannot survive per-batch filtering, so retain the original schema
+			// with the lossless chunk fallback instead of relying on the summary.
+			if _, declared := rawProps[s]; !declared {
+				return "", false
+			}
+			allRequired = append(allRequired, s)
 		}
 	}
 

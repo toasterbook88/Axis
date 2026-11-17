@@ -10,7 +10,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/mcpclient"
 )
 
 var schemaContinuationPattern = regexp.MustCompile(`tool_search\(query="([^"]+)", page=(\d+)\)`)
@@ -157,6 +159,57 @@ func TestToolSearch_PropertyPaginationPreservesExactNumbers(t *testing.T) {
 		args = next
 	}
 	t.Fatal("number schema continuation did not finish")
+}
+
+func TestToolSearch_MCPRequiredNamesOutsidePropertiesRoundTrip(t *testing.T) {
+	for _, undeclaredOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("undeclared_only_%t", undeclaredOnly), func(t *testing.T) {
+			props := make(map[string]any)
+			var required []string
+			for i := 0; i < 20; i++ {
+				name := fmt.Sprintf("property_%02d", i)
+				props[name] = map[string]any{"type": "string", "description": strings.Repeat("d", 110)}
+				if !undeclaredOnly {
+					required = append(required, name)
+				}
+			}
+			props["record_id"] = json.RawMessage(`{"type":"integer","enum":[9007199254740993],"minimum":1e+09}`)
+			for i := 0; i < 25; i++ {
+				required = append(required, fmt.Sprintf("z_required_additional_parameter_%02d", i))
+			}
+			schema := mcp.ToolInputSchema{
+				Type:                 "object",
+				Properties:           props,
+				Required:             required,
+				AdditionalProperties: map[string]any{"type": "string", "minLength": 1},
+				AdditionalFields:     map[string]any{"minProperties": 25},
+			}
+			want, err := json.Marshal(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reg := mcpclient.NewRegistry()
+			reg.Add(&mcpclient.ServerConnection{
+				Name:       "pages",
+				InitResult: &mcp.InitializeResult{},
+				Tools:      []mcp.Tool{{Name: "configure", Description: "Configure things", InputSchema: schema}},
+			})
+			r := NewToolRegistry(nil)
+			r.RegisterMCPTools(reg)
+			r.SetResultCapBytes(2048)
+			const name = "mcp_pages_configure"
+			for _, query := range []string{"select:" + name, noisySchemaQuery(name)} {
+				got := reconstructAdvertisedSchema(t, r, toolSearchArgs{Query: query, Page: 1})
+				fns := extractFunctionPayloads(t, got)
+				if len(fns) != 1 || fns[0].Name != name || fns[0].Server != "pages" || fns[0].Description != "Configure things" {
+					t.Fatalf("MCP schema metadata changed after following continuation: %q", got)
+				}
+				if string(fns[0].Parameters) != string(want) {
+					t.Fatalf("MCP schema must round-trip byte-for-byte, including all required names, constraints, and numeric lexemes:\ngot: %s\nwant: %s", fns[0].Parameters, want)
+				}
+			}
+		})
+	}
 }
 
 func TestToolSearch_FirstOversizedKeywordMatchKeepsAllMatchesReachable(t *testing.T) {
