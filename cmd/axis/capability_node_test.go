@@ -11,7 +11,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
-const linuxProbeOut = "os=Linux\narch=x86_64\ncores=8\nram_total_kb=16384000\ndisk_total_kb=943718400\nnvidia_driver=present\nnvidia_gpu=NVIDIA GeForce RTX 2080 Ti\nnvidia_gpu=NVIDIA GeForce RTX 5060\n"
+const linuxProbeOut = "os=Linux\narch=x86_64\ncores=8\nram_total_kb=16384000\ndisk_total_kb=943718400\nnvidia_driver=present\nnvidia_gpu=NVIDIA Example GPU A\nnvidia_gpu=NVIDIA Example GPU B\n"
 
 func TestParseNodeProbe(t *testing.T) {
 	r, err := parseNodeProbe(linuxProbeOut)
@@ -34,7 +34,7 @@ func TestParseNodeProbe(t *testing.T) {
 func gpu(vendor, model string) models.GPUInfo { return models.GPUInfo{Vendor: vendor, Model: model} }
 
 func TestJudgeGPU(t *testing.T) {
-	present := nodeReading{NVIDIADriver: "present", NVIDIAGPUs: []string{"NVIDIA GeForce RTX 2080 Ti"}}
+	present := nodeReading{NVIDIADriver: "present", NVIDIAGPUs: []string{"NVIDIA Example GPU A"}}
 	absent := nodeReading{NVIDIADriver: "absent"}
 	smiError := "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running."
 	for _, tc := range []struct {
@@ -44,12 +44,12 @@ func TestJudgeGPU(t *testing.T) {
 		want     capability.Outcome
 		claimHas string
 	}{
-		{"agree", []models.GPUInfo{gpu("nvidia", "NVIDIA GeForce RTX 2080 Ti")}, present, capability.OutcomePass, "the 1 NVIDIA GPU(s) the driver shows"},
-		{"an error listed as a GPU", []models.GPUInfo{gpu("nvidia", smiError), gpu("intel", "Iris Plus")}, absent, capability.OutcomeFail, "error message as a GPU"},
-		{"a GPU with no driver", []models.GPUInfo{gpu("nvidia", "NVIDIA GeForce MX250")}, absent, capability.OutcomeFail, "no NVIDIA driver loaded"},
+		{"agree", []models.GPUInfo{gpu("nvidia", "NVIDIA Example GPU A")}, present, capability.OutcomePass, "the 1 NVIDIA GPU(s) the driver shows"},
+		{"an error listed as a GPU", []models.GPUInfo{gpu("nvidia", smiError), gpu("intel", "Example iGPU")}, absent, capability.OutcomeFail, "error message as a GPU"},
+		{"a GPU with no driver", []models.GPUInfo{gpu("nvidia", "NVIDIA Example GPU C")}, absent, capability.OutcomeFail, "no NVIDIA driver loaded"},
 		{"one GPU missing", nil, present, capability.OutcomeFail, "AXIS lists 0 NVIDIA GPU(s), the driver shows 1"},
-		{"no NVIDIA anywhere", []models.GPUInfo{gpu("intel", "HD Graphics 5500")}, absent, capability.OutcomeInconclusive, "no NVIDIA driver"},
-		{"apple silicon", []models.GPUInfo{gpu("apple", "Apple GPU")}, absent, capability.OutcomeInconclusive, "no NVIDIA driver"},
+		{"no NVIDIA anywhere", []models.GPUInfo{gpu("intel", "Example iGPU")}, absent, capability.OutcomePass, "lists no NVIDIA GPU"},
+		{"apple silicon", []models.GPUInfo{gpu("apple", "Apple GPU")}, absent, capability.OutcomePass, "lists no NVIDIA GPU"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := judgeGPU(capability.Observation{Capability: "facts.gpu"}, tc.gpus, tc.probe)
@@ -85,7 +85,7 @@ func TestNodeChecksAgainstThePublishedSnapshot(t *testing.T) {
 	wrongCores := sampleHardware
 	wrongCores.Cores = 4
 	fakeCluster(t, []models.NodeFacts{
-		snapNode("alpha", models.StatusComplete, ok, gpu("nvidia", "NVIDIA GeForce RTX 2080 Ti"), gpu("nvidia", "NVIDIA GeForce RTX 5060")),
+		snapNode("alpha", models.StatusComplete, ok, gpu("nvidia", "NVIDIA Example GPU A"), gpu("nvidia", "NVIDIA Example GPU B")),
 		snapNode("beta", models.StatusComplete, wrongCores),
 		snapNode("gamma", models.StatusUnreachable, hardwareReading{}),
 		snapNode("delta", models.StatusComplete, ok),

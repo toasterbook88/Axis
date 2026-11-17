@@ -305,8 +305,11 @@ func judgeGPU(obs capability.Observation, gpus []models.GPUInfo, r nodeReading) 
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists %d NVIDIA GPU(s) (%s); the machine has no NVIDIA driver loaded", listed, strings.Join(nvidia, ", ")))
 	case r.NVIDIADriver != "present":
-		obs.Outcome = capability.OutcomeInconclusive
-		obs.Claim = "no NVIDIA driver on the machine to check against"
+		// Agreement on absence is a checked claim: placement trusts it, and a
+		// machine that once listed a phantom GPU can only close its failure
+		// by being checked clean.
+		obs.Outcome = capability.OutcomePass
+		obs.Claim = "AXIS lists no NVIDIA GPU, and the machine has no NVIDIA driver loaded"
 	case len(nvidia) != len(r.NVIDIAGPUs):
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists %d NVIDIA GPU(s), the driver shows %d (%s)", len(nvidia), len(r.NVIDIAGPUs), strings.Join(r.NVIDIAGPUs, ", ")))
