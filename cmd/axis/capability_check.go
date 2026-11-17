@@ -17,8 +17,9 @@ import (
 
 // capabilityCheckers are Axis's own checkers: the only source of passes that
 // count toward promotion. Each runs its probe itself.
-var capabilityCheckers = map[string]func(context.Context) capability.Observation{
+var capabilityCheckers = map[string]func(ctx context.Context, node string) capability.Observation{
 	"facts.hardware": checkFactsHardware,
+	"facts.gpu":      checkFactsGPU,
 }
 
 func capabilityCheckerNames() []string {
@@ -53,7 +54,10 @@ const factsHardwareChecker = "axis capability check facts.hardware"
 // checkFactsHardware compares what the AXIS fact collector reports for this
 // machine with a reading the probe takes through system calls. The evidence
 // hash covers both readings.
-func checkFactsHardware(ctx context.Context) capability.Observation {
+func checkFactsHardware(ctx context.Context, node string) capability.Observation {
+	if node != "" {
+		return checkFactsHardwareNode(ctx, node)
+	}
 	obs := capability.Observation{Capability: "facts.hardware", Checker: factsHardwareChecker, Outcome: capability.OutcomeInconclusive}
 	probe, ref, err := capabilityProbeHardware()
 	obs.Evidence = capability.Evidence{Kind: capability.EvidenceLiveProbe, Ref: ref}
@@ -77,6 +81,12 @@ func checkFactsHardware(ctx context.Context) capability.Observation {
 		OS: strings.ToLower(nf.OS), Arch: normalizeArch(nf.Arch), Cores: nf.Resources.CPUCores,
 		RAMTotalMB: nf.Resources.RAMTotalMB, DiskTotalGB: nf.Resources.DiskTotalGB,
 	}
+	return judgeHardware(obs, axis, probe)
+}
+
+// judgeHardware decides facts.hardware from the two readings. The evidence
+// hash covers both.
+func judgeHardware(obs capability.Observation, axis, probe hardwareReading) capability.Observation {
 	digest, _ := json.Marshal(map[string]hardwareReading{"axis": axis, "probe": probe})
 	sum := sha256.Sum256(digest)
 	obs.Evidence.SHA256 = hex.EncodeToString(sum[:])
@@ -87,6 +97,7 @@ func checkFactsHardware(ctx context.Context) capability.Observation {
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim("AXIS facts disagree with the probe: " + strings.Join(mismatched, "; "))
 	case len(unobserved) > 0:
+		obs.Outcome = capability.OutcomeInconclusive
 		obs.Claim = capabilityClaim("AXIS facts did not observe " + strings.Join(unobserved, ", "))
 	default:
 		obs.Outcome = capability.OutcomePass

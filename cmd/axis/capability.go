@@ -174,19 +174,28 @@ func printCapabilityEntry(out io.Writer, e capability.Entry) {
 }
 
 func capabilityCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	var nodes, except []string
+	var allNodes bool
+	cmd := &cobra.Command{
 		Use:   "check <capability>",
 		Short: "Run one of Axis's own checkers and record what it found",
 		Long: `Run a capability's built-in checker on this machine and record the result.
 These are the only observations whose passes count toward promotion.
 
 Checkers:
-  facts.hardware  compares what the AXIS fact collector reports for this
-                  machine (OS, architecture, CPU count, RAM total, root disk
-                  total) with an independent reading taken through system calls
+  facts.hardware  compares the OS, architecture, CPU count, RAM total and root
+                  disk total AXIS reports with a fresh reading of the machine
+  facts.gpu       compares the NVIDIA GPUs AXIS lists with what the NVIDIA
+                  driver shows, and fails any GPU entry that is an error message
 
-A disagreement is a counted failure. A value the collector did not observe, or
-a probe that could not run, makes the result inconclusive.`,
+With no --node, the check runs the AXIS fact collector on this machine and
+reads the hardware through system calls. With --node or --all-nodes, it reads
+AXIS's published snapshot for each machine and runs a read-only shell probe on
+it through AXIS's own SSH transport.
+
+A disagreement is a counted failure. A value AXIS did not observe, a machine
+AXIS cannot reach, or a probe that could not run makes the result
+inconclusive.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			run, ok := capabilityCheckers[args[0]]
@@ -197,36 +206,56 @@ a probe that could not run, makes the result inconclusive.`,
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			defer cancel()
-			obs := run(ctx)
+			targets, err := capabilityTargets(ctx, nodes, allNodes, except)
+			if err != nil {
+				return err
+			}
 			policies, err := capability.LoadPolicies(capability.PolicyPath())
 			if err != nil {
 				return err
 			}
-			rec, transition, err := capability.Open(capability.Dir()).RecordCheck(obs, policies)
-			if err != nil {
-				return err
-			}
-			if transition != nil {
-				emitCapabilityTransition(*transition)
-			}
+			store := capability.Open(capability.Dir())
 			out := cmd.OutOrStdout()
-			if format, ok := capabilityStructured(cmd); ok {
-				return printOutput(out, map[string]any{"observation": obs, "record": rec, "transition": transition}, format)
+			format, structured := capabilityStructured(cmd)
+			var results []map[string]any
+			for _, target := range targets {
+				nodeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+				obs := run(nodeCtx, target)
+				cancel()
+				rec, transition, err := store.RecordCheck(obs, policies)
+				if err != nil {
+					return err
+				}
+				if transition != nil {
+					emitCapabilityTransition(*transition)
+				}
+				if structured {
+					results = append(results, map[string]any{"node": target, "observation": obs, "record": rec, "transition": transition})
+					continue
+				}
+				subject := obs.Subject
+				if subject == "" {
+					subject = "this machine"
+				}
+				fmt.Fprintf(out, "%s on %s: %s\n  %s\n", obs.Capability, subject, obs.Outcome, obs.Claim)
+				fmt.Fprintf(out, "level %s, streak %d\n", rec.Level, rec.Streak)
+				if transition != nil {
+					fmt.Fprintf(out, "%s: %s -> %s (%s)\n", transition.Kind, transition.From, transition.To, transition.Reason)
+				}
 			}
-			subject := obs.Subject
-			if subject == "" {
-				subject = "this machine"
-			}
-			fmt.Fprintf(out, "%s on %s: %s\n  %s\n", obs.Capability, subject, obs.Outcome, obs.Claim)
-			fmt.Fprintf(out, "level %s, streak %d\n", rec.Level, rec.Streak)
-			if transition != nil {
-				fmt.Fprintf(out, "%s: %s -> %s (%s)\n", transition.Kind, transition.From, transition.To, transition.Reason)
+			if structured {
+				if len(results) == 1 && len(nodes) == 0 && !allNodes {
+					return printOutput(out, results[0], format)
+				}
+				return printOutput(out, results, format)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringSliceVar(&nodes, "node", nil, "Check these machines from AXIS's published snapshot (repeat or comma-separate)")
+	cmd.Flags().BoolVar(&allNodes, "all-nodes", false, "Check every machine in AXIS's published snapshot")
+	cmd.Flags().StringSliceVar(&except, "except", nil, "Machines to leave out of --all-nodes")
+	return cmd
 }
 
 func capabilityRecordCmd() *cobra.Command {

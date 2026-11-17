@@ -52,10 +52,6 @@ internal/placement/ranker.go clusterPressurePenalty
 internal/safety/structured.go LearnAllow
 internal/safety/structured.go LearnDeny
 internal/secrets/secrets.go IsConfigured
-internal/transport/local.go Connect
-internal/transport/local.go Stream
-internal/transport/local.go ForwardLocal
-internal/transport/local.go Close
 internal/transport/ssh.go NewSSHExecutorWithDialTarget
 internal/ui/color.go Boldf
 internal/ui/color.go StatusIcon

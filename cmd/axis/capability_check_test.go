@@ -39,7 +39,7 @@ func TestFactsHardwareCheckerVerdicts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeHardware(t, tc.axis, tc.axisErr, tc.probe, tc.probeErr)
-			obs := checkFactsHardware(context.Background())
+			obs := checkFactsHardware(context.Background(), "")
 			if obs.Outcome != tc.want || !strings.Contains(obs.Claim, tc.claimHas) {
 				t.Fatalf("outcome %s claim %q; want %s containing %q", obs.Outcome, obs.Claim, tc.want, tc.claimHas)
 			}
