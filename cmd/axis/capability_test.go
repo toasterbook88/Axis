@@ -200,3 +200,65 @@ func TestCapabilityShowAndBadInput(t *testing.T) {
 		t.Fatal("check must refuse a capability with no built-in checker")
 	}
 }
+
+func TestCapabilityRecordWithAHashedFileCanBeCritical(t *testing.T) {
+	useTempAxisHome(t)
+	fakeHardware(t, sampleFacts(sampleHardware), nil, sampleHardware, nil)
+	if _, err := runCapability(t, "ceiling", "facts.hardware", "supervised"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2*capability.DefaultPromoteAfter; i++ {
+		if _, err := runCapability(t, "check", "facts.hardware"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail", "--severity", "critical",
+		"--evidence-kind", "file", "--evidence-ref", "findings/audit.md", "--evidence-sha256", "be92cb38e3b69b75")
+	if err != nil || !strings.Contains(out, "demoted: supervised -> unproven") || strings.Contains(out, "ordinary failure") {
+		t.Fatalf("a critical failure backed by a hashed file must demote to unproven: %q, %v", out, err)
+	}
+	out, err = runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail", "--severity", "critical",
+		"--evidence-kind", "file", "--evidence-ref", "findings/audit.md")
+	if err != nil || !strings.Contains(out, "ordinary failure") {
+		t.Fatalf("a file with no --evidence-sha256 is not grounded: %q, %v", out, err)
+	}
+}
+
+func TestCapabilityStructuredOutput(t *testing.T) {
+	useTempAxisHome(t)
+	for _, format := range []string{"json", "yaml"} {
+		out, err := runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "fail",
+			"--evidence-kind", "peer", "--evidence-ref", "x", "--format", format)
+		if err != nil || !strings.Contains(out, "record") || !strings.Contains(out, "facts.hardware") {
+			t.Fatalf("record --format %s = %q, %v", format, out, err)
+		}
+	}
+	out, err := runCapability(t, "record", "--capability", "facts.hardware", "--outcome", "pass", "--format", "json")
+	var recorded struct {
+		Record     capability.Record      `json:"record"`
+		Transition *capability.Transition `json:"transition"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &recorded) != nil || recorded.Record.Totals != (capability.Totals{Fail: 2, Inconclusive: 1}) || recorded.Transition != nil {
+		t.Fatalf("record --format json = %q, %v", out, err)
+	}
+	out, err = runCapability(t, "ceiling", "facts.hardware", "trusted", "--format", "json")
+	var ceiling struct {
+		Record      capability.Record       `json:"record"`
+		Transitions []capability.Transition `json:"transitions"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &ceiling) != nil || ceiling.Record.Ceiling != capability.LevelTrusted ||
+		len(ceiling.Transitions) != 1 || ceiling.Transitions[0].Kind != capability.TransitionCeiling {
+		t.Fatalf("ceiling --format json = %q, %v", out, err)
+	}
+	out, err = runCapability(t, "show", "facts.hardware", "--format", "json")
+	var entry capability.Entry
+	if err != nil || json.Unmarshal([]byte(out), &entry) != nil || entry.Ceiling != capability.LevelTrusted || entry.Totals.Fail != 2 {
+		t.Fatalf("show --format json = %q, %v", out, err)
+	}
+	if out, err = runCapability(t, "show", "facts.hardware", "--format", "yaml"); err != nil || !strings.Contains(out, "ceiling: trusted") {
+		t.Fatalf("show --format yaml = %q, %v", out, err)
+	}
+	if out, err = runCapability(t, "verify", "--format", "json"); err != nil || !strings.Contains(out, "\"ok\": true") {
+		t.Fatalf("verify --format json = %q, %v", out, err)
+	}
+}
