@@ -443,7 +443,7 @@ func TestCloudOptsForTargetNormalizesProviderNameAndAliasCost(t *testing.T) {
 		target := ModelChoice{
 			Model: "alpha", Protocol: agent.ProtocolCloud, ProviderName: "groq", // wrong casing
 		}
-		opts, err := cloudOptsForTarget(loadRT, &target)
+		opts, err := cloudOptsForTarget(context.Background(), loadRT, &target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +459,7 @@ func TestCloudOptsForTargetNormalizesProviderNameAndAliasCost(t *testing.T) {
 		target := ModelChoice{
 			Model: "alias-hit", Protocol: agent.ProtocolCloud, ProviderName: "Groq",
 		}
-		opts, err := cloudOptsForTarget(loadRT, &target)
+		opts, err := cloudOptsForTarget(context.Background(), loadRT, &target)
 		if err != nil {
 			t.Fatal(err)
 		}
