@@ -1,0 +1,115 @@
+# Capability record: evidence-backed levels for what AXIS can be trusted to do
+
+Date: 2026-11-17. Status: implemented on `feat/capability-record`. This spec was written after the
+code, which is out of order under AGENTS.md §8; the PR says so and asks the maintainer to rule on it.
+
+## Problem
+
+AXIS reports facts, ranks placements and runs guarded tasks, and the operator widens what agents may
+do by hand: autonomy modes in `internal/agent/autonomy.go`, A2A scope tiers in `internal/a2a/card.go`,
+the approval queue in `internal/a2a/approval.go`. Nothing records how often a capability has been
+right. An operator deciding whether to loosen a gate has no track record to read, only memory.
+
+A live comparison of `axis status` against independent probes of each machine found the facts
+mostly right but not entirely: one node reported a GPU whose model field was an `nvidia-smi` error
+sentence tagged `cuda`. Without a record, a defect like that stays invisible until something places
+work on it.
+
+## Non-goals
+
+- No surface reads a level to allow or refuse an action. The record is advisory: a ledger of what was
+  observed, not an authority path. Wiring levels into autonomy or A2A is a later change with its own spec.
+- No protection against a writer running as the same user. Anything that can run `axis capability`
+  can rewrite the journal and the state together. `verify` detects cheaper tampering only.
+- No per-agent records. The `actor` field exists in the schema, but only `axis` holds a record until
+  an actor's identity can be verified.
+- No new network listener and no daemon change. Node checks use the published snapshot and the existing
+  SSH transport.
+- `facts.gpu` checks NVIDIA GPUs only. Apple and other GPUs are out of scope.
+
+## Design
+
+Levels, in order: `unproven`, `advisory`, `supervised`, `trusted`. A record starts at `unproven` with
+a ceiling of `advisory`, the highest level that cannot act.
+
+Observations are `pass`, `fail` or `inconclusive`, with evidence (`live-probe`, `file`, `peer`, `none`)
+and an origin the store sets:
+
+- A pass counts only from one of AXIS's own checkers (`axis capability check`, origin `checker`) with
+  grounded evidence: a named live probe, or a file with its content hash. A pass reported with
+  `axis capability record` (origin `external`) is kept and counted as inconclusive, because a caller
+  can name a probe it never ran.
+- Every failure counts, whoever reports it. Only a checker failure with grounded evidence can be
+  critical (demote to `unproven`); any other failure demotes one level. The operator drops a capability
+  further by lowering its ceiling.
+- Promotion is one level at a time, up to the ceiling, when all hold: the streak of counted passes
+  reaches `promote_after` (default 20, floor 10); the pass rate over the last `window` outcomes is at
+  least `min_rate` (default 0.98, floor 0.9); the streak covers at least `min_span` of time (default
+  6h, floor 1h); and no subject has an open failure. A failure from a checker opens its subject; only a
+  later checker pass on that same subject closes it. Any level change resets the streak.
+- The store stamps every entry's time, so a caller cannot backdate observations to fake the span.
+
+Storage, under `~/.axis/capability/`:
+
+- `journal.jsonl`: every observation and ceiling change, one JSON line each, numbered from 1, each
+  carrying the SHA-256 of the line before it and the thresholds in force. It is synced to disk before
+  the state is written.
+- `state.json`: a cache of replaying the journal, with `next_seq`, `head` and `journal_bytes`. A write
+  that stopped after the journal is counted on the next write, without reusing a sequence number.
+- `transitions.jsonl`: a derived log of level and ceiling changes for readers.
+- Policy (thresholds and descriptions only) is read from `~/.axis/capabilities.yaml`; a policy below the
+  floors is refused, and the state machine raises any thresholds it is given to the floors.
+
+Checkers: `facts.hardware` compares OS, architecture, CPU count, RAM total and root disk total;
+`facts.gpu` compares the NVIDIA GPUs AXIS lists with what the NVIDIA driver shows under
+`/proc/driver/nvidia`, fails any GPU entry whose model is an error message, and passes when AXIS lists
+no NVIDIA GPU and no NVIDIA driver is loaded. Without `--node`, a check runs the fact collector on this
+machine against system calls; with `--node`/`--all-nodes` it compares the node's entry in the
+published snapshot with a read-only shell probe run over the AXIS SSH transport. A node AXIS reports
+unreachable, or that the probe cannot reach, is inconclusive. Subjects are `node:<snapshot name>`,
+lowercased.
+
+Commands: `axis capability list|show|check|record|ceiling|verify|export`. Level changes are emitted as
+`capability.promoted`, `capability.demoted` and `capability.ceiling.changed` events.
+
+Tests: `internal/capability/*_test.go` (state machine edges, floors, span, open failures, journal
+chain, catch-up after an interrupted write, verify against edited, removed and truncated lines, torn
+last line, concurrent writers through the store lock), `cmd/axis/capability*_test.go` (each command,
+structured output, event emission, checker verdicts, node mode with a stubbed snapshot and probe).
+
+## Alternatives
+
+- **Hand-set levels only (today).** No evidence behind a level; rejected because it is the problem.
+- **Count every observation a caller reports.** Rejected: an audit raised a capability to `advisory`
+  with twenty invented probe names.
+- **Rate gate without a time span.** Rejected: twenty back-to-back local checks promoted in 83 seconds.
+- **One record per (capability, subject).** Simpler to reason about per machine, but a capability that
+  is right on nine machines and wrong on one would still reach a level for nine of them. Open
+  failures keep one record per capability and block it while any machine fails.
+- **Merkle log (RFC 9162 style) instead of a linear hash chain.** Gives inclusion proofs a single
+  operator does not need; a linear chain is enough to detect edits and is simpler to replay.
+- **A separate service account as the writer.** Would stop same-user rewrites, but is access hardening
+  this project does not do. The stated precondition is to anchor the journal head in backups instead.
+
+## Research
+
+Prior art:
+
+- Progressive delivery gates promotion on repeated analysis runs with success thresholds and failure
+  limits, which is the shape used here: Argo Rollouts analysis,
+  https://argo-rollouts.readthedocs.io/en/stable/features/analysis/
+- Append-only, hash-linked logs make tampering detectable without trusting the writer at read time:
+  Certificate Transparency, RFC 9162, https://www.rfc-editor.org/rfc/rfc9162
+- In this repo: `internal/failures` (scoped failure memory with expiry), `internal/state`
+  observations (exact-scope execution records), and `internal/repairs` (advisory receipts) are records
+  that inform without granting authority; this record follows the same rule.
+
+Measurement, from runs against a live cluster in throwaway `AXIS_HOME` directories:
+
+- Before the span and open-failure rules, twenty local checks reached `advisory` in 83 s, and 47 checks
+  of one healthy node reached `advisory` while another node's `facts.gpu` failure stood. After them,
+  25 rapid checks and 60 single-node checks did not promote.
+- A sweep of ten nodes runs in under two minutes; each entry costs one fsync. Replay in `verify` is linear
+  in the journal; no optimization applies at hourly sweeps.
+
+## Review
