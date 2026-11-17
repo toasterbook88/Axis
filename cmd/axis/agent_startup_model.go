@@ -231,7 +231,7 @@ func isPrivateLAN(ip netip.Addr) bool {
 }
 
 func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
-	opts, err := cloudOptsForTarget(session.Runtime, &choice)
+	opts, err := cloudOptsForTarget(context.Background(), session.Runtime, &choice)
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
 // ai-role catalog entries and nodes.yaml resident OpenAI endpoints that share
 // a hub URL with a keyed ai.yaml backend.
 // target is a pointer so provider-name casing normalization is retained by callers.
-func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
+func cloudOptsForTarget(ctx context.Context, loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
 	var opts agent.CloudBackendOptions
 	if target == nil {
 		return opts, fmt.Errorf("cloud target is nil")
@@ -286,7 +286,7 @@ func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error
 	if loadRT == nil {
 		return opts, fmt.Errorf("runtime loader required for cloud model %q", target.Model)
 	}
-	rt, err := loadRT(context.Background())
+	rt, err := loadRT(ctx)
 	if err != nil {
 		return opts, fmt.Errorf("load runtime for cloud provider: %w", err)
 	}
@@ -694,7 +694,7 @@ func resolveStartupModelTarget(
 	}
 
 	if explicit != nil && explicit.Model != "" {
-		opts, err := cloudOptsForTarget(func(context.Context) (*runtimectx.Context, error) { return rt, nil }, explicit)
+		opts, err := cloudOptsForTarget(context.Background(), func(context.Context) (*runtimectx.Context, error) { return rt, nil }, explicit)
 		return *explicit, opts, err
 	}
 
@@ -725,7 +725,7 @@ func resolveStartupModelTarget(
 	cloudReq := strings.TrimSpace(cloudModelFlag)
 
 	optsForChoice := func(c ModelChoice) (agent.CloudBackendOptions, error) {
-		return cloudOptsForTarget(func(context.Context) (*runtimectx.Context, error) { return rt, nil }, &c)
+		return cloudOptsForTarget(context.Background(), func(context.Context) (*runtimectx.Context, error) { return rt, nil }, &c)
 	}
 
 	switch providerMode {
