@@ -68,7 +68,8 @@ Checkers: `facts.hardware` compares OS, architecture, CPU count, RAM total and r
 `facts.gpu` compares the NVIDIA GPUs AXIS lists with what the NVIDIA driver shows under
 `/proc/driver/nvidia`, fails any GPU entry whose model is an error message, and passes when AXIS lists
 no NVIDIA GPU and no NVIDIA driver is loaded. Without `--node`, a check runs the fact collector on this
-machine against system calls; with `--node`/`--all-nodes` it compares the node's entry in the
+machine against system calls; with `--node`/`--all-nodes` (and `--except` to leave machines out) it
+compares the node's entry in the
 published snapshot with a read-only shell probe run over the AXIS SSH transport. A node AXIS reports
 unreachable, or that the probe cannot reach, is inconclusive. Subjects are `node:<snapshot name>`,
 lowercased. A check without `--node` names this machine the same way, by the snapshot node whose
@@ -138,3 +139,23 @@ Questions:
 - Is writing this spec after the code acceptable under AGENTS.md section 8? Open: only the maintainer can rule on it; the PR asks.
 - Does any real node have an OS hostname that differs from its snapshot name? Verified: in the cluster this was built against, two of eleven nodes do (compared the names in `axis status` with each node's recorded hostname), so finding 2 was reachable.
 - Are capability events written when no daemon runs, and do they reach Cortex? Verified: `emitCapabilityTransition` enqueues to the event worker and `main` flushes it on exit, which writes the event log (TestCapabilityTransitionsReachTheEventLog); the root command registers the Cortex client when one is configured, and `capability.*` names are not on the telemetry block list in `internal/events`, so they are forwarded. Delivery to a live Cortex has not been observed yet, because no live promotion has happened.
+
+Kind: diff
+Reviewer: the author, not fresh-context (at the maintainer's direction, while the requested fresh-context reviews had not started)
+Model: Anthropic Claude
+Base: ab1461a385311d5cb18e4ba43db76647c0092cbb
+Head: 7b80538c27ddd350e49addee0c21406106c61f9e
+Date: 2026-11-18
+Verdict: approve-with-changes
+
+1. Minor: `--node` naming this machine dialed it over SSH when its OS hostname matched neither its config name nor its config hostname, which is true of two nodes in the cluster this was built against; the check then depended on SSH to itself. Fixed in 452535db: the probe also uses a local shell when the snapshot recorded this machine's hostname for the node; TestProbeRunnerUsesALocalShellForThisMachine.
+
+2. Minor: `resolve` matched subjects exactly, so `node:ALPHA` did not close an open `node:alpha` (a probe test returned "has no open failure"). Fixed in 452535db: the command writes node subjects in their canonical form; TestCapabilityResolveCommand resolves with the other case.
+
+3. Minor: no test asserted that `resolve` emits `capability.failure.resolved`. Fixed in 452535db: TestCapabilityResolveCommand reads it from the event log.
+
+4. Minor: `--except` was in the code and its help but not in this spec. Fixed in this file: Design names it.
+
+Questions:
+
+- Does an author review count toward the diff reviews section 8 asks of a change this size? Open: it is not independent; it is recorded because the maintainer asked for it while the requested fresh-context diff reviews had not started, and the maintainer decides whether it counts.
