@@ -61,13 +61,15 @@ func liveUpstream(t *testing.T) string {
 	return srv.URL + "/v1"
 }
 
-// deadUpstream returns the address of a server that has stopped, so a
-// connection to it is refused.
+// deadUpstream fails requests while reserving its port until cleanup. Closing
+// the listener early lets another test server reuse it and appear healthy.
 func deadUpstream(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.NotFoundHandler())
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
 	url := srv.URL + "/v1"
-	srv.Close()
+	t.Cleanup(srv.Close)
 	return url
 }
 
