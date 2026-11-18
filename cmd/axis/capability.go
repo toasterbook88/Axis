@@ -426,19 +426,33 @@ level: the capability still has to earn it.`,
 var errCapabilityVerify = errors.New("the capability record does not match its journal")
 
 func capabilityVerifyCmd() *cobra.Command {
-	return &cobra.Command{
+	var repair bool
+	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Replay the journal and check that the state matches it",
 		Long: `Replay the capability journal from its first entry, checking that every
 line is in order and chained to the one before it, and compare the result with
 the state file. It writes nothing.
 
-It catches an edited state, an edited or removed journal line and a journal
-shorter than the state. It cannot catch a consistent rewrite of both, which
-anything running as this user can make.`,
+It catches an edited state, an edited or removed journal line, a journal
+shorter than the state, and a transitions log that no longer matches the
+journal. It cannot catch a consistent rewrite of journal and state, which
+anything running as this user can make.
+
+--repair-transitions first rebuilds the derived transitions.jsonl from the
+journal (for when a write of it failed after the state was saved). It never
+changes the journal or the state.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := capability.Open(capability.Dir()).Verify()
+			store := capability.Open(capability.Dir())
+			if repair {
+				n, err := store.RepairTransitions()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "rebuilt transitions.jsonl from the journal: %d transitions\n", n)
+			}
+			v, err := store.Verify()
 			if err != nil {
 				return err
 			}
@@ -470,6 +484,8 @@ anything running as this user can make.`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&repair, "repair-transitions", false, "Rebuild the derived transitions.jsonl from the journal before verifying")
+	return cmd
 }
 
 func capabilityExportCmd() *cobra.Command {

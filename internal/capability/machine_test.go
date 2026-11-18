@@ -302,7 +302,7 @@ func TestRecentIsTrimmedToTheWindow(t *testing.T) {
 
 func TestCeilingChanges(t *testing.T) {
 	rec := NewRecord("facts.hardware", DefaultActor, t0)
-	rec.Level, rec.Streak = LevelAdvisory, 4
+	rec.Level, rec.Streak, rec.OpenFailures = LevelAdvisory, 4, []string{"node:x"}
 	rec, trs := SetCeiling(rec, LevelSupervised, t0, "operator", 7)
 	if rec.Level != LevelAdvisory || rec.Streak != 4 || len(trs) != 1 || trs[0].Kind != TransitionCeiling || trs[0].Seq != 7 {
 		t.Fatalf("raising the ceiling must keep the level and streak: %+v %+v", rec, trs)
@@ -316,6 +316,10 @@ func TestCeilingChanges(t *testing.T) {
 	}
 	if len(trs) != 2 || trs[0].Kind != TransitionCeiling || trs[1].Kind != TransitionDemoted || rec.LastTransition.Kind != TransitionDemoted {
 		t.Fatalf("transitions = %+v, want a ceiling change then a demotion", trs)
+	}
+	// Open failures are evidence, not level: lowering and raising the ceiling leaves them open.
+	if rec, _ = SetCeiling(rec, LevelTrusted, t0, "operator", 10); len(rec.OpenFailures) != 1 {
+		t.Fatalf("a ceiling change must not close an open failure: %+v", rec.OpenFailures)
 	}
 }
 

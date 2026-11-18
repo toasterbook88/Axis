@@ -29,6 +29,9 @@ func TestParseNodeProbe(t *testing.T) {
 	if err != nil || r.Hardware != (hardwareReading{OS: "darwin", Arch: "arm64", Cores: 10, RAMTotalMB: 16384, DiskTotalGB: 228}) || r.NVIDIADriver != "absent" {
 		t.Fatalf("darwin probe = %+v, %v", r, err)
 	}
+	if r, err := parseNodeProbe("os=Linux\nnvidia_driver=present\nnvidia_unreadable=1\n"); err != nil || !r.NVIDIAUnreadable {
+		t.Fatalf("an unreadable driver list must be reported: %+v, %v", r, err)
+	}
 	if _, err := parseNodeProbe("ssh: connection refused\n"); err == nil {
 		t.Fatal("output with no readings must be refused")
 	}
@@ -53,6 +56,7 @@ func TestJudgeGPU(t *testing.T) {
 		{"one GPU missing", nil, present, capability.OutcomeFail, "AXIS lists 0 NVIDIA GPU(s), the driver shows 1"},
 		{"no NVIDIA anywhere", []models.GPUInfo{gpu("intel", "Example iGPU")}, absent, capability.OutcomePass, "lists no NVIDIA GPU"},
 		{"apple silicon", []models.GPUInfo{gpu("apple", "Apple GPU")}, absent, capability.OutcomePass, "lists no NVIDIA GPU"},
+		{"driver list unreadable", []models.GPUInfo{gpu("nvidia", "NVIDIA Example GPU A")}, nodeReading{NVIDIADriver: "present", NVIDIAUnreadable: true}, capability.OutcomeInconclusive, "cannot read"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := judgeGPU(capability.Observation{Capability: "facts.gpu"}, tc.gpus, tc.probe)

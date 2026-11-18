@@ -409,49 +409,140 @@ func (s *Store) Verify() (Verification, error) {
 		return Verification{}, err
 	}
 	v := Verification{Counted: st.NextSeq - 1}
-	replay := emptyState()
-	var snap *State
-	if st.NextSeq == 1 {
-		empty := emptyState()
-		snap = &empty
+	replay, snap, trs, problem, err := s.replayJournal(v.Counted)
+	if err != nil {
+		return Verification{}, err
 	}
-	f, err := os.Open(s.path(journalFile))
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return Verification{}, fmt.Errorf("opening the journal: %w", err)
-	default:
-		defer f.Close()
-		err = scanJournal(f, 0, func(e JournalEntry, line []byte) error {
-			if e.Seq != replay.NextSeq {
-				return fmt.Errorf("journal entry %d is out of order: entry %d was expected", e.Seq, replay.NextSeq)
-			}
-			if e.Prev != replay.Head {
-				return fmt.Errorf("journal entry %d does not chain to the entry before it: the journal was edited", e.Seq)
-			}
-			advance(&replay, e.Seq, line)
-			applyEntry(&replay, e)
-			if replay.NextSeq == st.NextSeq {
-				c := cloneState(replay)
-				snap = &c
-			}
-			return nil
-		})
-		if err != nil {
-			v.Problems = append(v.Problems, err.Error())
-		}
+	if problem != "" {
+		v.Problems = append(v.Problems, problem)
 	}
 	v.Entries, v.Head = replay.NextSeq-1, replay.Head
 	if snap == nil {
 		v.Problems = append(v.Problems, fmt.Sprintf("the state counts %d journal entries but the journal holds %d valid ones", v.Counted, v.Entries))
 	} else {
 		v.Problems = append(v.Problems, compareStates(st, *snap)...)
+		if problem == "" {
+			if msg := s.checkTransitions(trs); msg != "" {
+				v.Problems = append(v.Problems, msg)
+			}
+		}
 		if behind := v.Entries - v.Counted; behind > 0 {
 			v.Notes = append(v.Notes, fmt.Sprintf("the state has not yet counted the last %d journal entries; the next write counts them", behind))
 		}
 	}
 	v.OK = len(v.Problems) == 0
 	return v, nil
+}
+
+// replayJournal replays the whole journal. It returns the replayed state; the
+// replay as it stood once counted entries were applied (nil if the journal
+// never got that far); the transitions of those counted entries; and the first
+// chain problem, if any.
+func (s *Store) replayJournal(counted uint64) (State, *State, []Transition, string, error) {
+	replay := emptyState()
+	var snap *State
+	var trs []Transition
+	if counted == 0 {
+		empty := emptyState()
+		snap = &empty
+	}
+	f, err := os.Open(s.path(journalFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return replay, snap, trs, "", nil
+	}
+	if err != nil {
+		return State{}, nil, nil, "", fmt.Errorf("opening the journal: %w", err)
+	}
+	defer f.Close()
+	problem := ""
+	err = scanJournal(f, 0, func(e JournalEntry, line []byte) error {
+		if e.Seq != replay.NextSeq {
+			return fmt.Errorf("journal entry %d is out of order: entry %d was expected", e.Seq, replay.NextSeq)
+		}
+		if e.Prev != replay.Head {
+			return fmt.Errorf("journal entry %d does not chain to the entry before it: the journal was edited", e.Seq)
+		}
+		advance(&replay, e.Seq, line)
+		got := applyEntry(&replay, e)
+		if e.Seq <= counted {
+			trs = append(trs, got...)
+		}
+		if replay.NextSeq-1 == counted {
+			c := cloneState(replay)
+			snap = &c
+		}
+		return nil
+	})
+	if err != nil {
+		problem = err.Error()
+	}
+	return replay, snap, trs, problem, nil
+}
+
+// checkTransitions compares the derived transitions log with the transitions a
+// replay of the journal produces. It returns "" when they match.
+func (s *Store) checkTransitions(want []Transition) string {
+	data, err := os.ReadFile(s.path(transitionsFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		data, err = nil, nil
+	}
+	if err != nil {
+		return fmt.Sprintf("%s cannot be read: %v", transitionsFile, err)
+	}
+	var got []Transition
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var t Transition
+		if err := json.Unmarshal([]byte(line), &t); err != nil {
+			return fmt.Sprintf("%s has a line that is not a transition; rebuild it with axis capability verify --repair-transitions", transitionsFile)
+		}
+		got = append(got, t)
+	}
+	same := len(got) == len(want)
+	for i := 0; same && i < len(got); i++ {
+		a, b := got[i], want[i]
+		same = a.Seq == b.Seq && a.Kind == b.Kind && a.From == b.From && a.To == b.To && a.Capability == b.Capability
+	}
+	if same {
+		return ""
+	}
+	return fmt.Sprintf("%s does not match the journal (%d transitions there, %d in the replay); rebuild it with axis capability verify --repair-transitions", transitionsFile, len(got), len(want))
+}
+
+// RepairTransitions rewrites the derived transitions log from a replay of the
+// journal, for when a write of it failed after the state was saved. It never
+// touches the journal or the state, and it returns how many transitions it wrote.
+func (s *Store) RepairTransitions() (int, error) {
+	release, err := persist.LockFile(s.path(stateFile))
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	st, err := s.Load()
+	if err != nil {
+		return 0, err
+	}
+	_, snap, trs, problem, err := s.replayJournal(st.NextSeq - 1)
+	if err != nil {
+		return 0, err
+	}
+	if problem != "" || snap == nil {
+		return 0, errors.New("the journal does not replay cleanly; run axis capability verify")
+	}
+	var buf bytes.Buffer
+	for _, t := range trs {
+		line, err := json.Marshal(t)
+		if err != nil {
+			return 0, err
+		}
+		buf.Write(append(line, '\n'))
+	}
+	if err := persist.WritePrivateFileAtomic(s.path(transitionsFile), buf.Bytes()); err != nil {
+		return 0, err
+	}
+	return len(trs), nil
 }
 
 func cloneState(st State) State {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -463,5 +464,74 @@ func TestReplayRefusesAMalformedResolution(t *testing.T) {
 		if err := e.validate(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestVerifyFindsAndRepairsALostTransition(t *testing.T) {
+	s := newStore(t)
+	passes(t, s, 9)
+	// The derived log cannot be written: the promotion is saved in the journal
+	// and the state, but its transition is lost from transitions.jsonl.
+	if err := os.Mkdir(s.path(transitionsFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
+		t.Fatal("a failed transitions write must be reported")
+	}
+	if err := os.Remove(s.path(transitionsFile)); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Load(); st.Capabilities[Key("facts.hardware", DefaultActor)].Level != LevelAdvisory {
+		t.Fatal("the promotion itself must be kept in the state")
+	}
+	v, err := s.Verify()
+	if err != nil || v.OK || !strings.Contains(strings.Join(v.Problems, " | "), "transitions.jsonl does not match the journal") {
+		t.Fatalf("Verify must find the lost transition: %+v %v", v, err)
+	}
+	if n, err := s.RepairTransitions(); err != nil || n != 1 {
+		t.Fatalf("RepairTransitions = %d, %v; want the one promotion", n, err)
+	}
+	if v, err := s.Verify(); err != nil || !v.OK {
+		t.Fatalf("Verify after the repair = %+v, %v", v, err)
+	}
+	if lines := readLines(t, s.path(transitionsFile)); len(lines) != 1 || !strings.Contains(lines[0], `"promoted"`) || !strings.Contains(lines[0], `"seq":10`) {
+		t.Fatalf("rebuilt transitions = %v", lines)
+	}
+}
+
+func TestConcurrentWritersNeverLoseOrRepeatAnEntry(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "capability")
+	const writers, each = 4, 25
+	errs := make(chan error, writers*each)
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := Open(dir) // its own store, as separate processes would have
+			for i := 0; i < each; i++ {
+				if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("a concurrent write failed: %v", err)
+	}
+	s := Open(dir)
+	st, err := s.Load()
+	if err != nil || st.NextSeq != writers*each+1 || st.Capabilities[Key("facts.hardware", DefaultActor)].Totals.Pass != writers*each {
+		t.Fatalf("state after %d writes = next %d, %v", writers*each, st.NextSeq, err)
+	}
+	for i, e := range entries(t, s) {
+		if e.Seq != uint64(i+1) {
+			t.Fatalf("entry %d has seq %d: concurrent writers lost or repeated one", i+1, e.Seq)
+		}
+	}
+	if v, err := s.Verify(); err != nil || !v.OK || v.Entries != writers*each {
+		t.Fatalf("Verify = %+v, %v", v, err)
 	}
 }

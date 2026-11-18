@@ -30,7 +30,12 @@ if [ "$os" = Linux ]; then
   if [ -d /proc/driver/nvidia/gpus ]; then
     echo "nvidia_driver=present"
     for f in /proc/driver/nvidia/gpus/*/information; do
-      [ -r "$f" ] && awk -F: '/^Model:/{sub(/^[ \t]+/, "", $2); print "nvidia_gpu=" $2}' "$f"
+      [ -e "$f" ] || continue
+      if [ -r "$f" ]; then
+        awk -F: '/^Model:/{sub(/^[ \t]+/, "", $2); print "nvidia_gpu=" $2}' "$f"
+      else
+        echo "nvidia_unreadable=1"
+      fi
     done
   else
     echo "nvidia_driver=absent"
@@ -47,6 +52,9 @@ type nodeReading struct {
 	Hardware     hardwareReading `json:"hardware"`
 	NVIDIADriver string          `json:"nvidia_driver"`
 	NVIDIAGPUs   []string        `json:"nvidia_gpus"`
+	// NVIDIAUnreadable is set when the driver lists a GPU whose details this
+	// user cannot read, so the GPU count is not known.
+	NVIDIAUnreadable bool `json:"nvidia_unreadable,omitempty"`
 }
 
 func parseNodeProbe(out string) (nodeReading, error) {
@@ -77,6 +85,8 @@ func parseNodeProbe(out string) (nodeReading, error) {
 			if value != "" {
 				r.NVIDIAGPUs = append(r.NVIDIAGPUs, value)
 			}
+		case "nvidia_unreadable":
+			r.NVIDIAUnreadable = true
 		}
 	}
 	if r.Hardware.OS == "" || r.NVIDIADriver == "" {
@@ -319,6 +329,9 @@ func judgeGPU(obs capability.Observation, gpus []models.GPUInfo, r nodeReading) 
 	case len(errorText) > 0:
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists an error message as a GPU: %q", errorText[0]))
+	case r.NVIDIADriver == "present" && r.NVIDIAUnreadable:
+		obs.Outcome = capability.OutcomeInconclusive
+		obs.Claim = "the NVIDIA driver lists a GPU this user cannot read, so the GPU count is not known"
 	case r.NVIDIADriver != "present" && listed > 0:
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists %d NVIDIA GPU(s) (%s); the machine has no NVIDIA driver loaded", listed, strings.Join(nvidia, ", ")))
