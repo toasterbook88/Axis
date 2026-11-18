@@ -47,7 +47,7 @@ and an origin the store sets:
 - Promotion is one level at a time, up to the ceiling, when all hold: the streak of counted passes
   reaches `promote_after` (default 20, floor 10); the pass rate over the last `window` outcomes is at
   least `min_rate` (default 0.98, floor 0.9); the streak covers at least `min_span` of time (default
-  6h, floor 1h); and no subject has an open failure. A failure from a checker opens its subject; a
+  6h, floor 1h, a whole number of minutes); and no subject has an open failure. A failure from a checker opens its subject; a
   later checker pass on that same subject closes it, or the operator closes it with `axis capability
   resolve <capability> <subject> --reason ...` for a machine that was retired, renamed or will not be
   checked again. A resolution is a journal entry with its reason; it never raises a level. Any level
@@ -62,14 +62,16 @@ Storage, under `~/.axis/capability/`:
 - `state.json`: a cache of replaying the journal, with `next_seq`, `head` and `journal_bytes`. A write
   that stopped after the journal is counted on the next write, without reusing a sequence number.
 - `transitions.jsonl`: a derived log of level and ceiling changes for readers. It is appended after the
-  state is saved, so a failed append can lose a transition from it; `verify` compares it with the
-  transitions a replay of the journal produces, and `verify --repair-transitions` rebuilds it from the
+  state is saved, so a failed append can lose a transition from it; `verify` compares it, whole transition by
+  whole transition, with the transitions a replay of the journal produces, and `verify --repair-transitions` rebuilds it from the
   journal without touching the journal or the state.
 - Policy (thresholds and descriptions only) is read from `~/.axis/capabilities.yaml`; a policy below the
   floors is refused, and the state machine raises any thresholds it is given to the floors.
 
-Checkers: `facts.hardware` compares OS, architecture, CPU count, RAM total and root disk total;
-`facts.gpu` compares the NVIDIA GPUs AXIS lists with what the NVIDIA driver shows under
+Checkers: `facts.hardware` compares OS, architecture, CPU count (the CPUs the collector may use, as
+`nproc` counts them), RAM total and root disk total; a reading the probe did not take is inconclusive,
+while a mismatch among the readings it took still fails. `facts.gpu` compares the NVIDIA GPU models
+AXIS lists (ignoring order, case and spacing) with what the NVIDIA driver shows under
 `/proc/driver/nvidia`, fails any GPU entry whose model is an error message, and passes when AXIS lists
 no NVIDIA GPU and no NVIDIA driver is loaded. A driver GPU entry the probe cannot read makes the check
 inconclusive, since the GPU count is then unknown. Without `--node`, a check runs the fact collector on this
@@ -81,7 +83,8 @@ lowercased. A check without `--node` names this machine the same way, by the sna
 recorded hostname is this machine's, and falls back to the OS hostname only when there is no snapshot
 or no such node.
 
-Commands: `axis capability list|show|check|record|ceiling|resolve|verify|export`. Level changes are
+Commands: `axis capability list|show|check|record|ceiling|resolve|verify|export`. Each takes
+`--format text|json|yaml` and refuses any other value; `export` writes JSON unless it is `yaml`. Level changes are
 emitted as `capability.promoted`, `capability.demoted`, `capability.ceiling.changed` and
 `capability.failure.resolved` events.
 
