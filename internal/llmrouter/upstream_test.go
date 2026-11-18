@@ -3,8 +3,10 @@ package llmrouter_test
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -61,14 +63,37 @@ func liveUpstream(t *testing.T) string {
 	return srv.URL + "/v1"
 }
 
-// deadUpstream returns the address of a server that has stopped, so a
-// connection to it is refused.
+// deadUpstream returns the address of an upstream that never answers: its
+// handler aborts every request, so the client gets a transport error, as it
+// would from a stopped server. The server stays up until the test ends.
+// Closing it at once would free its port, and a later httptest server in the
+// same run can be given that port, which turns the "dead" upstream healthy.
 func deadUpstream(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := srv.URL + "/v1"
-	srv.Close()
-	return url
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
+}
+
+// TestDeadUpstreamKeepsItsPortAndFailsAtTheTransport guards the fixture: a
+// dead upstream whose port was freed could be handed to a later test server
+// and answer as healthy.
+func TestDeadUpstreamKeepsItsPortAndFailsAtTheTransport(t *testing.T) {
+	addr, err := url.Parse(deadUpstream(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := net.Listen("tcp", addr.Host); err == nil {
+		ln.Close()
+		t.Fatal("deadUpstream freed its port, so a later test server could take it")
+	}
+	resp, err := http.Get(addr.String() + "/models")
+	if err == nil {
+		resp.Body.Close()
+		t.Fatalf("a request to deadUpstream got %s; want a transport error", resp.Status)
+	}
 }
 
 func hubConfig(prefer []string, backends ...config.AIBackendConfig) *config.AIConfig {
