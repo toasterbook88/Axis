@@ -20,6 +20,19 @@ type subAgentBackend struct {
 	calls  int
 }
 
+func briefArgs(extra map[string]any) map[string]any {
+	args := map[string]any{
+		"objective":     "report the delegated result",
+		"output_format": "one paragraph",
+		"sources":       "the child tools only",
+		"boundary":      "do not change files",
+	}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return args
+}
+
 func (b *subAgentBackend) ChatStream(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -37,11 +50,11 @@ func TestSpawnSubagentReturnsChildAnswer(t *testing.T) {
 		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
-	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, briefArgs(map[string]any{
 		"prompt":      "run go test on lab-5 and report",
 		"target_node": "lab-5",
 		"max_turns":   2,
-	})))
+	}))))
 	if err != nil {
 		t.Fatalf("dispatchSubagent: %v", err)
 	}
@@ -63,11 +76,11 @@ func TestSpawnSubagentAsync(t *testing.T) {
 		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
-	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, briefArgs(map[string]any{
 		"prompt":      "build project on foundry",
 		"target_node": "foundry",
 		"async":       true,
-	})))
+	}))))
 	if err != nil {
 		t.Fatalf("dispatchSubagent async: %v", err)
 	}
@@ -86,10 +99,10 @@ func TestSpawnSubagentSilenceIsNotCompletion(t *testing.T) {
 			Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 			ToolContext: NewToolContext(&RuntimeView{}, nil),
 		})
-		out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+		out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, briefArgs(map[string]any{
 			"prompt":      "report the result",
 			"target_node": "lab-5",
-		})))
+		}))))
 		if err == nil || !strings.Contains(err.Error(), "no final answer") {
 			t.Fatalf("answer %q: got %v", answer, err)
 		}
@@ -108,10 +121,10 @@ func TestSpawnSubagentAsyncSilenceFailsTheTask(t *testing.T) {
 		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
-	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, briefArgs(map[string]any{
 		"prompt": "report the result",
 		"async":  true,
-	})))
+	}))))
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -154,9 +167,26 @@ func TestSpawnSubagentEmptyPromptErrors(t *testing.T) {
 func TestSpawnSubagentRecursionLimit(t *testing.T) {
 	parent := New(Config{Backend: &subAgentBackend{}, Output: io.Discard, ToolContext: NewToolContext(&RuntimeView{}, nil)})
 	parent.subAgentDepth = maxSubAgentDepth
-	_, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{"prompt": "x"})))
+	_, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, briefArgs(map[string]any{"prompt": "x"}))))
 	if err == nil || !strings.Contains(err.Error(), "recursion limit") {
 		t.Fatalf("expected recursion-limit error, got %v", err)
+	}
+}
+
+func TestSpawnSubagentRejectsIncompleteBrief(t *testing.T) {
+	parent := New(Config{Backend: &subAgentBackend{answer: "should not run"}, Output: io.Discard, ToolContext: NewToolContext(&RuntimeView{}, nil)})
+	cases := []map[string]any{
+		{"prompt": "do the task"},
+		briefArgs(map[string]any{"prompt": "do the task", "objective": "  "}),
+		briefArgs(map[string]any{"prompt": "do the task", "output_format": ""}),
+		briefArgs(map[string]any{"prompt": "do the task", "sources": " "}),
+		briefArgs(map[string]any{"prompt": "do the task", "boundary": ""}),
+	}
+	for _, args := range cases {
+		_, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, args)))
+		if err == nil || !strings.Contains(err.Error(), "brief is incomplete") || !strings.Contains(err.Error(), "must not do the delegated work") {
+			t.Fatalf("args %v: got %v", args, err)
+		}
 	}
 }
 
