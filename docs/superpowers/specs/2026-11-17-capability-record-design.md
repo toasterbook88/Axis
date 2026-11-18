@@ -203,7 +203,7 @@ Verdict: approve
 Note: In a fresh clone at Head, each Hermes finding and question was rerun: verify-specs failed only on this missing re-review, the Status line cites the maintainer's acceptance, and the tests for findings 3 to 5 and both questions pass, the concurrency test under the race detector. Two mutations confirmed the new tests can fail: with verify no longer checking transitions.jsonl, TestVerifyFindsAndRepairsALostTransition fails; with the store lock removed, TestConcurrentWritersNeverLoseOrRepeatAnEntry fails at once. This re-review is not independent.
 
 Kind: diff
-Reviewer: fresh-context subagent run by the Codex agent
+Reviewer: fresh-context subagent run by the Codex agent (reviewer A)
 Model: OpenAI GPT (version not stated by the reviewer)
 Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
 Head: b7afa9361806f239613ceda19246469a0a72bec8
@@ -223,3 +223,27 @@ Date: 2026-11-18
 Verdict: approve
 
 Note: In a fresh clone, the reviewer's own two probe tests, copied in unchanged (TestReviewPartialLocalProbeKeepsMeasuredMismatch and TestReviewCheckJSONMatchesJournalObservation), pass at Head and fail at the reviewed head b7afa936. With the old capability_check.go restored, the two new TestFactsHardwareCheckerVerdicts cases fail. The full hermetic suite passes at Head. This re-review is not independent.
+
+Kind: diff
+Reviewer: fresh-context subagent run by the Codex agent (reviewer A), re-review
+Model: OpenAI GPT (version not stated by the reviewer)
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: 28501fc3e1f1b21da18b4cb4cf98d8356c96b39a
+Date: 2026-11-17
+Verdict: approve
+
+Note: Both of reviewer A's probes pass unchanged at Head; every file changed since b7afa936 was inspected and no new defect found; the capability and command suites and the capability race tests pass.
+
+Kind: diff
+Reviewer: fresh-context subagent run by the Codex agent (reviewer B), independent of reviewer A
+Model: OpenAI GPT (version not stated by the reviewer)
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: b7afa9361806f239613ceda19246469a0a72bec8
+Date: 2026-11-17
+Verdict: revise
+
+1. Major: with the NVIDIA GPU directory present but not listable, the probe's glob matched nothing and reported the driver with zero GPUs, so `facts.gpu` earned a counted pass without seeing the list. Fixed in 8b198bfa: an unlistable directory, a GPU directory without a readable information file, or a file naming no model marks the list unreadable and the check inconclusive; TestTheNodeProbeNeverPassesAGPUListItCannotRead runs the real probe script on each case, and all three fail on the old script.
+
+2. Major: a local probe that stopped early discarded the readings it had taken. Fixed in d3b57c85: reviewer A's first finding.
+
+3. Minor: structured check output printed the unstamped observation. Fixed in d3b57c85: reviewer A's second finding.
