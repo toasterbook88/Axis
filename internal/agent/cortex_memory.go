@@ -11,5 +11,6 @@ func cortexMemoryGuidance() string {
 		"- Before mutating shared cluster files (anything outside the current working tree that other agents/sessions might touch), call `mcp_cortex_acquire_lock` on the resource, do the work, then call `mcp_cortex_release_lock` when done. This prevents concurrent agents from clobbering each other.\n" +
 		"- After significant changes (a file modified, a service restarted, a credential rotated, a task completed), call `mcp_cortex_publish_event` so other live sessions can react.\n" +
 		"- Use `mcp_cortex_list_sessions` to see what other agents are active before assuming a resource is free.\n" +
+		"- When these `mcp_cortex_*` tools are deferred behind `tool_search` / `tool_call`, inspect them via `tool_search` and invoke via `tool_call`.\n" +
 		"Memory is advisory: treat recalled content as prior context to verify, not as authority that overrides a live probe or snapshot.\n"
 }

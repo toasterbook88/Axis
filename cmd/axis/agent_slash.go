@@ -707,17 +707,21 @@ func historyRoleLabel(role string) string {
 }
 
 func slashTools(session *agentREPLSession, _ []string) (bool, bool, error) {
-	defs := session.Agent.ToolDefs()
+	entries := session.Agent.ToolCatalog()
 	w := session.Out
-	if len(defs) == 0 {
+	if len(entries) == 0 {
 		fmt.Fprintln(w, "\nNo tools registered.")
 		return true, false, nil
 	}
 	tbl := ui.NewTable("TOOL NAME", "SAFETY", "DESCRIPTION")
-	for _, d := range defs {
+	for _, entry := range entries {
+		d := entry.Def
 		safety := ui.YellowColor.Sprint("Execute")
 		if session.Agent.ToolAutoApproved(d.Function.Name) {
 			safety = ui.GreenColor.Sprint("Auto-approved")
+		}
+		if entry.Deferred {
+			safety += ui.Dim(" [deferred]")
 		}
 		tbl.AddRow(d.Function.Name, safety, d.Function.Description)
 	}

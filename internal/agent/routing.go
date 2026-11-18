@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -93,10 +94,10 @@ func DefaultRouterClassifier(msgs []chat.Message) (bool, string) {
 		}
 	}
 
-	// If the previous assistant turn invoked a code-editing tool or a sub-agent,
-	// the model is mid-flow on hard work → keep it on the strong model.
+	// If the previous assistant turn invoked a code-editing tool or a sub-agent
+	// (including via the deferred tool_call bridge), keep follow-ups on the strong model.
 	for _, tc := range lastAssistantToolCalls {
-		switch tc.Function.Name {
+		switch resolveRouterToolName(tc) {
 		case "write_file", "edit_file", "multi_edit", "spawn_subagent", "axis_run_task", "run_on_node":
 			return false, "previous turn used a mutating/complex tool"
 		}
@@ -131,6 +132,20 @@ var routerHardKeywords = []string{
 	"write a script", "create a", "build a", "deploy", "structure",
 	"algorithm", "concurrency", "race condition", "deadlock",
 	"pull request", "pr ", "commit", "branch", "merge",
+}
+
+func resolveRouterToolName(tc chat.ToolCall) string {
+	name := strings.ToLower(strings.TrimSpace(tc.Function.Name))
+	if name != toolCallName {
+		return name
+	}
+	var payload struct {
+		Name string `json:"name"`
+	}
+	if len(tc.Function.Arguments) > 0 && json.Unmarshal(tc.Function.Arguments, &payload) == nil {
+		return strings.ToLower(strings.TrimSpace(payload.Name))
+	}
+	return name
 }
 
 // dimLabel is a minimal styling helper kept local to avoid a ui import cycle
