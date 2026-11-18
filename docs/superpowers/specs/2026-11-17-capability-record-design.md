@@ -188,3 +188,13 @@ Questions:
 
 - Should a driver GPU entry the probe cannot read make `facts.gpu` fail? Verified: it should not; the probe now reports it and the check is inconclusive, fixed in 7436eca8 with a TestJudgeGPU case.
 - Does raising the ceiling after lowering it keep the old open failures? Verified: yes, by design, since open failures record evidence rather than level; TestCeilingChanges now asserts it.
+
+Kind: spec
+Reviewer: the author, re-reviewing the Hermes findings only (Hermes out of quota; at the maintainer's direction)
+Model: Anthropic Claude
+Base: 4465fa4a81a14c19fbfbdca00feed2f976da0e0e
+Head: 6ace14182fa9e99fc6b40cfdc6c396e48e4508c9
+Date: 2026-11-18
+Verdict: approve
+
+Note: In a fresh clone at Head, each Hermes finding and question was rerun: verify-specs failed only on this missing re-review, the Status line cites the maintainer's acceptance, and the tests for findings 3 to 5 and both questions pass, the concurrency test under the race detector. Two mutations confirmed the new tests can fail: with verify no longer checking transitions.jsonl, TestVerifyFindsAndRepairsALostTransition fails; with the store lock removed, TestConcurrentWritersNeverLoseOrRepeatAnEntry fails at once. This re-review is not independent.
