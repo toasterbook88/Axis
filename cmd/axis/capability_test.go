@@ -267,7 +267,11 @@ func TestCapabilityStructuredOutput(t *testing.T) {
 }
 
 func TestCapabilityResolveCommand(t *testing.T) {
-	useTempAxisHome(t)
+	home := useTempAxisHome(t)
+	if err := events.ResetTestLog(filepath.Join(home, "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = events.ResetTestLog("") })
 	bad := sampleHardware
 	bad.Cores = 4
 	fakeHardware(t, sampleFacts(bad), nil, sampleHardware, nil)
@@ -277,9 +281,19 @@ func TestCapabilityResolveCommand(t *testing.T) {
 	if _, err := runCapability(t, "resolve", "facts.hardware", "node:alpha"); err == nil {
 		t.Fatal("resolve without --reason must be refused")
 	}
-	out, err := runCapability(t, "resolve", "facts.hardware", "node:alpha", "--reason", "machine retired")
+	out, err := runCapability(t, "resolve", "facts.hardware", "node:ALPHA", "--reason", "machine retired")
 	if err != nil || !strings.Contains(out, "closed the open failure on node:alpha") {
-		t.Fatalf("resolve = %q, %v", out, err)
+		t.Fatalf("resolve with the name in another case = %q, %v", out, err)
+	}
+	if err := events.FlushEvents(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	resolved := false
+	for _, e := range events.GetRecentEvents(100) {
+		resolved = resolved || (e.Name == events.EventCapabilityFailureResolved && e.Payload["capability"] == "facts.hardware")
+	}
+	if !resolved {
+		t.Fatal("resolve must emit capability.failure.resolved")
 	}
 	if out, err = runCapability(t, "show", "facts.hardware"); err != nil || strings.Contains(out, "failing ") {
 		t.Fatalf("show after resolve = %q, %v", out, err)

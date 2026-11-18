@@ -396,7 +396,11 @@ level: the capability still has to earn it.`,
 		Example: "  axis capability resolve facts.gpu node:alpha --reason \"machine retired\"",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rec, transitions, err := capability.Open(capability.Dir()).Resolve(args[0], args[1], reason)
+			subject := strings.TrimSpace(args[1])
+			if strings.HasPrefix(strings.ToLower(subject), "node:") {
+				subject = nodeSubject(subject[len("node:"):]) // the one spelling the checkers write
+			}
+			rec, transitions, err := capability.Open(capability.Dir()).Resolve(args[0], subject, reason)
 			if err != nil {
 				return err
 			}
@@ -407,7 +411,7 @@ level: the capability still has to earn it.`,
 			if format, ok := capabilityStructured(cmd); ok {
 				return printOutput(out, map[string]any{"record": rec, "transitions": transitions}, format)
 			}
-			fmt.Fprintf(out, "%s: closed the open failure on %s; level %s\n", rec.Capability, args[1], rec.Level)
+			fmt.Fprintf(out, "%s: closed the open failure on %s; level %s\n", rec.Capability, subject, rec.Level)
 			if len(rec.OpenFailures) > 0 {
 				fmt.Fprintf(out, "still failing on %s\n", strings.Join(rec.OpenFailures, ", "))
 			}

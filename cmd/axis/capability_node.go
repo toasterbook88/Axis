@@ -133,11 +133,7 @@ func runNodeProbe(ctx context.Context, name string) (string, string, error) {
 		if !ok {
 			return "", "", fmt.Errorf("node %q is not in the AXIS config", name)
 		}
-		if !capabilityNodeIsLocal(node) {
-			spec := node.SSHDialSpec()
-			ex = transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
-			ref = "ssh to " + name + ": uname, getconf or sysctl, /proc/meminfo, df, /proc/driver/nvidia"
-		}
+		ex, ref = probeRunnerFor(ctx, node)
 	}
 	if err := ex.Connect(ctx); err != nil {
 		return "", ref, fmt.Errorf("connecting: %w", err)
@@ -153,6 +149,30 @@ func runNodeProbe(ctx context.Context, name string) (string, string, error) {
 // nodeSubject is the one spelling of a machine in the record, so a failure on it
 // can only be closed by a pass on the same machine.
 func nodeSubject(name string) string { return "node:" + strings.ToLower(strings.TrimSpace(name)) }
+
+// probeRunnerFor picks how to run the probe on node: a local shell when node is
+// this machine, by its config name or hostname or by the hostname the snapshot
+// recorded for it (an OS hostname can match neither config field), else AXIS SSH.
+func probeRunnerFor(ctx context.Context, node config.NodeConfig) (probeRunner, string) {
+	local := capabilityNodeIsLocal(node)
+	if !local {
+		if host, err := os.Hostname(); err == nil && host != "" {
+			if nodes, err := capabilitySnapshotNodes(ctx); err == nil {
+				for _, n := range nodes {
+					if strings.EqualFold(n.Name, node.Name) && shortHostname(n.Hostname) == shortHostname(host) {
+						local = true
+					}
+				}
+			}
+		}
+	}
+	if local {
+		return transport.NewLocalExecutor(), "this machine: uname, getconf or sysctl, /proc/meminfo, df, /proc/driver/nvidia"
+	}
+	spec := node.SSHDialSpec()
+	return transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks),
+		"ssh to " + node.Name + ": uname, getconf or sysctl, /proc/meminfo, df, /proc/driver/nvidia"
+}
 
 func capabilityNodeIsLocal(node config.NodeConfig) bool {
 	host, err := os.Hostname()

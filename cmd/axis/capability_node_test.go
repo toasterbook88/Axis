@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/capability"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -156,5 +159,27 @@ func TestTheRealProbeScriptRunsHere(t *testing.T) {
 	r, err := parseNodeProbe(out)
 	if err != nil || r.Hardware.Cores < 1 || r.Hardware.RAMTotalMB < 1 || r.Hardware.DiskTotalGB < 1 {
 		t.Fatalf("probe = %+v, %v\n%s", r, err, out)
+	}
+}
+
+func TestProbeRunnerUsesALocalShellForThisMachine(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skip("no hostname here")
+	}
+	prev := capabilitySnapshotNodes
+	t.Cleanup(func() { capabilitySnapshotNodes = prev })
+	node := config.NodeConfig{Name: "alpha", Hostname: "192.0.2.10"} // neither field is this machine's hostname
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) {
+		return []models.NodeFacts{{Name: "alpha", Hostname: host}}, nil
+	}
+	if ex, _ := probeRunnerFor(context.Background(), node); fmt.Sprintf("%T", ex) != "*transport.LocalExecutor" {
+		t.Fatalf("the snapshot says alpha is this machine, but the probe would dial %T", ex)
+	}
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) {
+		return []models.NodeFacts{{Name: "alpha", Hostname: "elsewhere"}}, nil
+	}
+	if ex, _ := probeRunnerFor(context.Background(), node); fmt.Sprintf("%T", ex) != "*transport.SSHExecutor" {
+		t.Fatalf("another machine must be dialed over SSH, got %T", ex)
 	}
 }
