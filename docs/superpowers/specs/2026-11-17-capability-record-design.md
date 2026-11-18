@@ -257,3 +257,23 @@ Date: 2026-11-17
 Verdict: approve
 
 Note: Each Hermes finding and both questions were checked at Head in a read-only clone (spec review record, the maintainer's acceptance, local and node subjects, transitions repair, concurrent writers under the race detector, unreadable driver entry, ceiling raise); no findings; the full hermetic suite passes. This is the reviewer's own re-review, independent of the author's re-review above.
+
+Kind: diff
+Reviewer: fresh-context subagent run by the Codex agent (reviewer A), final re-review
+Model: OpenAI GPT (version not stated by the reviewer)
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: b7b19338e61c5311252a8a624847941208ee9ec9
+Date: 2026-11-17
+Verdict: approve
+
+Note: Approves the cumulative diff; every file changed since 28501fc3 inspected with no new defect; the original probes, the new GPU-listing test and an extra probe with an inaccessible child GPU directory pass; capability and command suites pass.
+
+Kind: diff
+Reviewer: fresh-context subagent run by the Codex agent (reviewer B), final re-review
+Model: OpenAI GPT (version not stated by the reviewer)
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: b7b19338e61c5311252a8a624847941208ee9ec9
+Date: 2026-11-17
+Verdict: approve
+
+Note: All three findings resolved; every file changed since b7afa936 inspected with no new defect; all three original probes pass in a fresh clone, changed only for the new RecordCheck return values; capability, command and race suites and the repository gates pass.
