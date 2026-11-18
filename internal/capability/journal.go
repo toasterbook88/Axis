@@ -18,7 +18,19 @@ type EntryKind string
 const (
 	EntryObservation EntryKind = "observation"
 	EntryCeiling     EntryKind = "ceiling"
+	// EntryResolve is an operator closing one subject's open failure: for a
+	// machine that was retired, renamed or will not be checked again.
+	EntryResolve EntryKind = "resolve"
 )
+
+// Resolution is an operator closing one subject's open failure.
+type Resolution struct {
+	At         time.Time `json:"at"`
+	Capability string    `json:"capability"`
+	Actor      string    `json:"actor"`
+	Subject    string    `json:"subject"`
+	Reason     string    `json:"reason"`
+}
 
 // CeilingChange is an operator moving a capability's ceiling.
 type CeilingChange struct {
@@ -38,6 +50,7 @@ type JournalEntry struct {
 	Observation *Observation   `json:"observation,omitempty"`
 	Thresholds  *Thresholds    `json:"thresholds,omitempty"`
 	Ceiling     *CeilingChange `json:"ceiling,omitempty"`
+	Resolve     *Resolution    `json:"resolve,omitempty"`
 }
 
 func lineHash(line []byte) string {
@@ -51,7 +64,7 @@ func (e JournalEntry) validate() error {
 	}
 	switch e.Kind {
 	case EntryObservation:
-		if e.Observation == nil || e.Thresholds == nil || e.Ceiling != nil {
+		if e.Observation == nil || e.Thresholds == nil || e.Ceiling != nil || e.Resolve != nil {
 			return errors.New("an observation entry carries an observation and its thresholds, and nothing else")
 		}
 		obs := *e.Observation
@@ -69,7 +82,7 @@ func (e JournalEntry) validate() error {
 			return fmt.Errorf("counted %q does not follow from the observation (%q)", obs.Counted, Counted(obs))
 		}
 	case EntryCeiling:
-		if e.Ceiling == nil || e.Observation != nil || e.Thresholds != nil {
+		if e.Ceiling == nil || e.Observation != nil || e.Thresholds != nil || e.Resolve != nil {
 			return errors.New("a ceiling entry carries a ceiling change and nothing else")
 		}
 		c := *e.Ceiling
@@ -87,6 +100,25 @@ func (e JournalEntry) validate() error {
 		}
 		if reason, err := oneLine("reason", c.Reason); err != nil || reason != c.Reason || reason == "" {
 			return errors.New("a ceiling change needs a single-line, trimmed reason")
+		}
+	case EntryResolve:
+		if e.Resolve == nil || e.Observation != nil || e.Thresholds != nil || e.Ceiling != nil {
+			return errors.New("a resolve entry carries a resolution and nothing else")
+		}
+		r := *e.Resolve
+		if r.At.IsZero() {
+			return errors.New("a resolution needs a time")
+		}
+		if err := ValidateCapabilityID(r.Capability); err != nil {
+			return err
+		}
+		if err := validateActor(r.Actor); err != nil {
+			return err
+		}
+		for field, v := range map[string]string{"subject": r.Subject, "reason": r.Reason} {
+			if s, err := oneLine(field, v); err != nil || s != v || s == "" {
+				return fmt.Errorf("a resolution needs a single-line, trimmed %s", field)
+			}
 		}
 	default:
 		return fmt.Errorf("unknown entry kind %q", e.Kind)
@@ -127,6 +159,19 @@ func applyEntry(st *State, e JournalEntry) []Transition {
 		rec, trs := SetCeiling(rec, c.Ceiling, c.At, c.Reason, e.Seq)
 		st.Capabilities[key] = &rec
 		return trs
+	case EntryResolve:
+		r := *e.Resolve
+		key := Key(r.Capability, r.Actor)
+		rec := NewRecord(r.Capability, r.Actor, r.At)
+		if cur, ok := st.Capabilities[key]; ok {
+			rec = *cur
+		}
+		rec.OpenFailures = withoutSubject(rec.OpenFailures, r.Subject)
+		t := Transition{Kind: TransitionResolved, Capability: rec.Capability, Actor: rec.Actor, From: rec.Level, To: rec.Level,
+			At: r.At, Reason: fmt.Sprintf("open failure on %s closed by the operator: %s", r.Subject, r.Reason), Seq: e.Seq}
+		rec.LastTransition = &t
+		st.Capabilities[key] = &rec
+		return []Transition{t}
 	}
 	return nil
 }

@@ -147,6 +147,8 @@ const (
 	TransitionPromoted TransitionKind = "promoted"
 	TransitionDemoted  TransitionKind = "demoted"
 	TransitionCeiling  TransitionKind = "ceiling"
+	// TransitionResolved is an operator closing one subject's open failure.
+	TransitionResolved TransitionKind = "resolved"
 )
 
 // Transition is one change to a capability's level or ceiling.

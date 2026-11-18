@@ -248,9 +248,7 @@ func checkFactsGPU(ctx context.Context, name string) capability.Observation {
 			}
 			return obs
 		}
-		if host := shortHostname(nf.Hostname); host != "" {
-			obs.Subject = "node:" + host
-		}
+		obs.Subject = localSubject(ctx, nf.Hostname)
 		gpus = nf.Resources.GPUs
 	} else {
 		obs.Checker += " --node"

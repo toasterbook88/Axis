@@ -94,6 +94,9 @@ const (
 
 	// EventCapabilityCeilingChanged is emitted when an operator moves a capability's ceiling.
 	EventCapabilityCeilingChanged = "capability.ceiling.changed"
+
+	// EventCapabilityFailureResolved is emitted when an operator closes one subject's open failure.
+	EventCapabilityFailureResolved = "capability.failure.resolved"
 )
 
 // cortexDaemonTelemetryEvents are high-frequency Axis daemon lifecycle names.

@@ -138,7 +138,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | `axis init` | Configuration wizard |
 | `axis mesh` | `status`, `peers` |
 | `axis observations` | Execution observations |
-| `axis capability` | Evidence-backed capability record: list, show, check, record, ceiling, verify, export |
+| `axis capability` | Evidence-backed capability record: list, show, check, record, ceiling, resolve, verify, export |
 | `axis tui` | Full-screen workspace: embedded agent console, cluster sidebar, dashboard (`--dashboard` alone) |
 
 Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrConfigLoad` ·

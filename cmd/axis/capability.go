@@ -43,7 +43,7 @@ action.`,
 	}
 	cmd.PersistentFlags().String("format", "text", "Output format: text, json, or yaml")
 	cmd.AddCommand(capabilityListCmd(), capabilityShowCmd(), capabilityCheckCmd(), capabilityRecordCmd(),
-		capabilityCeilingCmd(), capabilityVerifyCmd(), capabilityExportCmd())
+		capabilityCeilingCmd(), capabilityResolveCmd(), capabilityVerifyCmd(), capabilityExportCmd())
 	return cmd
 }
 
@@ -382,6 +382,43 @@ has to earn it. Lowering the ceiling below the current level lowers the level.`,
 	return cmd
 }
 
+func capabilityResolveCmd() *cobra.Command {
+	var reason string
+	cmd := &cobra.Command{
+		Use:   "resolve <capability> <subject>",
+		Short: "Close one machine's open failure on a capability",
+		Long: `Close one subject's open failure, for a machine that was retired, renamed or
+will not be checked again. While a failure is open the capability cannot be
+promoted; normally only a passing check of that same machine closes it.
+
+The reason is required and kept in the journal. Resolving does not raise a
+level: the capability still has to earn it.`,
+		Example: "  axis capability resolve facts.gpu node:alpha --reason \"machine retired\"",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rec, transitions, err := capability.Open(capability.Dir()).Resolve(args[0], args[1], reason)
+			if err != nil {
+				return err
+			}
+			for _, t := range transitions {
+				emitCapabilityTransition(t)
+			}
+			out := cmd.OutOrStdout()
+			if format, ok := capabilityStructured(cmd); ok {
+				return printOutput(out, map[string]any{"record": rec, "transitions": transitions}, format)
+			}
+			fmt.Fprintf(out, "%s: closed the open failure on %s; level %s\n", rec.Capability, args[1], rec.Level)
+			if len(rec.OpenFailures) > 0 {
+				fmt.Fprintf(out, "still failing on %s\n", strings.Join(rec.OpenFailures, ", "))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&reason, "reason", "", "Why the failure no longer applies (required, kept in the journal)")
+	_ = cmd.MarkFlagRequired("reason")
+	return cmd
+}
+
 var errCapabilityVerify = errors.New("the capability record does not match its journal")
 
 func capabilityVerifyCmd() *cobra.Command {
@@ -459,6 +496,8 @@ func emitCapabilityTransition(t capability.Transition) {
 		name = events.EventCapabilityPromoted
 	case capability.TransitionDemoted:
 		name = events.EventCapabilityDemoted
+	case capability.TransitionResolved:
+		name = events.EventCapabilityFailureResolved
 	}
 	events.EmitToBuffer(nil, name, map[string]any{
 		"capability": t.Capability,

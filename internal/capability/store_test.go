@@ -415,3 +415,53 @@ func TestReportListsObservedAndUnobservedCapabilitiesInRungOrder(t *testing.T) {
 		t.Fatalf("an unobserved capability must be listed as unproven: %+v", second)
 	}
 }
+
+func TestResolveClosesOneOpenFailureForAMachineThatIsGone(t *testing.T) {
+	s := newStore(t)
+	failing := checked(OutcomeFail)
+	failing.Subject = "node:gone"
+	if _, _, err := s.RecordCheck(failing, fastPolicy); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ { // a long healthy streak elsewhere cannot promote past it
+		o := checked(OutcomePass)
+		o.Subject = "node:alpha"
+		if rec, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr != nil || len(rec.OpenFailures) != 1 {
+			t.Fatalf("pass %d: %+v %+v %v", i+1, rec, tr, err)
+		}
+	}
+	if _, _, err := s.Resolve("facts.hardware", "node:alpha", "not open"); err == nil {
+		t.Fatal("resolving a subject that is not open must be refused")
+	}
+	if _, _, err := s.Resolve("facts.hardware", "node:gone", ""); err == nil {
+		t.Fatal("resolve must require a reason")
+	}
+	rec, trs, err := s.Resolve("facts.hardware", "node:gone", "machine retired")
+	if err != nil || len(rec.OpenFailures) != 0 || rec.Level != LevelUnproven || len(trs) != 1 || trs[0].Kind != TransitionResolved {
+		t.Fatalf("Resolve = %+v %+v %v; want the failure closed and the level unchanged", rec, trs, err)
+	}
+	if last := entries(t, s)[21]; last.Kind != EntryResolve || last.Resolve.Reason != "machine retired" {
+		t.Fatalf("the resolution must be journaled with its reason: %+v", last)
+	}
+	o := checked(OutcomePass)
+	o.Subject = "node:alpha"
+	if rec, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr == nil || rec.Level != LevelAdvisory {
+		t.Fatalf("with the failure closed the next pass must promote: %+v %+v %v", rec, tr, err)
+	}
+	if v, err := s.Verify(); err != nil || !v.OK {
+		t.Fatalf("Verify after a resolution = %+v, %v", v, err)
+	}
+}
+
+func TestReplayRefusesAMalformedResolution(t *testing.T) {
+	for name, e := range map[string]JournalEntry{
+		"no reason":       {Seq: 1, Kind: EntryResolve, Resolve: &Resolution{At: t0, Capability: "facts.gpu", Actor: DefaultActor, Subject: "node:a"}},
+		"other actor":     {Seq: 1, Kind: EntryResolve, Resolve: &Resolution{At: t0, Capability: "facts.gpu", Actor: "agent:x", Subject: "node:a", Reason: "r"}},
+		"extra payload":   {Seq: 1, Kind: EntryResolve, Resolve: &Resolution{At: t0, Capability: "facts.gpu", Actor: DefaultActor, Subject: "node:a", Reason: "r"}, Thresholds: &Thresholds{}},
+		"untrimmed field": {Seq: 1, Kind: EntryResolve, Resolve: &Resolution{At: t0, Capability: "facts.gpu", Actor: DefaultActor, Subject: " node:a", Reason: "r"}},
+	} {
+		if err := e.validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

@@ -169,6 +169,57 @@ func (s *Store) SetCeiling(capability string, ceiling Level, reason string) (Rec
 	return *st.Capabilities[key], trs, nil
 }
 
+// Resolve closes one subject's open failure on a capability: the operator's way
+// out when a machine that failed is retired, renamed or will not be checked
+// again. Only a subject that is open can be resolved, and the reason is kept in
+// the journal. It does not raise a level.
+func (s *Store) Resolve(capability, subject, reason string) (Record, []Transition, error) {
+	if err := ValidateCapabilityID(capability); err != nil {
+		return Record{}, nil, err
+	}
+	subject, err := oneLine("subject", subject)
+	if err != nil {
+		return Record{}, nil, err
+	}
+	if reason, err = oneLine("reason", reason); err != nil {
+		return Record{}, nil, err
+	}
+	if subject == "" || reason == "" {
+		return Record{}, nil, errors.New("resolve needs a subject and a reason")
+	}
+	release, err := persist.LockFile(s.path(stateFile))
+	if err != nil {
+		return Record{}, nil, err
+	}
+	defer release()
+
+	st, caught, err := s.loadForWrite()
+	if err != nil {
+		return Record{}, nil, err
+	}
+	now := s.now()
+	key := Key(capability, DefaultActor)
+	cur, ok := st.Capabilities[key]
+	open := false
+	if ok {
+		for _, have := range cur.OpenFailures {
+			open = open || have == subject
+		}
+	}
+	if !open {
+		if err := s.saveCaught(st, caught, now); err != nil {
+			return Record{}, nil, err
+		}
+		return Record{}, nil, fmt.Errorf("%s has no open failure on %q", capability, subject)
+	}
+	change := &Resolution{At: now, Capability: capability, Actor: DefaultActor, Subject: subject, Reason: reason}
+	trs, err := s.commit(&st, JournalEntry{Kind: EntryResolve, Resolve: change}, caught, now)
+	if err != nil {
+		return Record{}, nil, err
+	}
+	return *st.Capabilities[key], trs, nil
+}
+
 // commit writes one entry to the journal, folds it into the state and saves
 // the state. The journal line is synced to disk before the state that counts
 // it is written, so the state never counts an entry the journal lacks.

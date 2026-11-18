@@ -14,7 +14,9 @@
 // operator sets, once the streak is long enough, covers enough time (6 hours
 // by default, never under 1) and no machine has an open failure: a failure
 // from Axis's checker on a machine blocks promotion until a check on that same
-// machine passes. A counted failure lowers the level at once. Only Axis's own
+// machine passes, or until the operator resolves it for a machine that will not
+// be checked again (axis capability resolve, journaled with its reason). A
+// counted failure lowers the level at once. Only Axis's own
 // checkers can fail critically; the operator drops a level further by
 // lowering the ceiling. The store stamps every entry's time itself.
 //

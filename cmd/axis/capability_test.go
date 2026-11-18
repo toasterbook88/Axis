@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,10 +38,13 @@ func sampleFacts(r hardwareReading) *models.NodeFacts {
 // fakeHardware replaces the fact collector and the probe for one test.
 func fakeHardware(t *testing.T, axis *models.NodeFacts, axisErr error, probe hardwareReading, probeErr error) {
 	t.Helper()
-	prevCollect, prevProbe := capabilityCollectLocal, capabilityProbeHardware
+	prevCollect, prevProbe, prevNodes := capabilityCollectLocal, capabilityProbeHardware, capabilitySnapshotNodes
 	capabilityCollectLocal = func(context.Context) (*models.NodeFacts, error) { return axis, axisErr }
 	capabilityProbeHardware = func() (hardwareReading, string, error) { return probe, "test probe", probeErr }
-	t.Cleanup(func() { capabilityCollectLocal, capabilityProbeHardware = prevCollect, prevProbe })
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) { return nil, errors.New("no snapshot in tests") }
+	t.Cleanup(func() {
+		capabilityCollectLocal, capabilityProbeHardware, capabilitySnapshotNodes = prevCollect, prevProbe, prevNodes
+	})
 }
 
 func useTempAxisHome(t *testing.T) string {
@@ -259,5 +263,47 @@ func TestCapabilityStructuredOutput(t *testing.T) {
 	}
 	if out, err = runCapability(t, "verify", "--format", "json"); err != nil || !strings.Contains(out, "\"ok\": true") {
 		t.Fatalf("verify --format json = %q, %v", out, err)
+	}
+}
+
+func TestCapabilityResolveCommand(t *testing.T) {
+	useTempAxisHome(t)
+	bad := sampleHardware
+	bad.Cores = 4
+	fakeHardware(t, sampleFacts(bad), nil, sampleHardware, nil)
+	if out, err := runCapability(t, "check", "facts.hardware"); err != nil || !strings.Contains(out, "fail") {
+		t.Fatalf("check = %q, %v", out, err)
+	}
+	if _, err := runCapability(t, "resolve", "facts.hardware", "node:alpha"); err == nil {
+		t.Fatal("resolve without --reason must be refused")
+	}
+	out, err := runCapability(t, "resolve", "facts.hardware", "node:alpha", "--reason", "machine retired")
+	if err != nil || !strings.Contains(out, "closed the open failure on node:alpha") {
+		t.Fatalf("resolve = %q, %v", out, err)
+	}
+	if out, err = runCapability(t, "show", "facts.hardware"); err != nil || strings.Contains(out, "failing ") {
+		t.Fatalf("show after resolve = %q, %v", out, err)
+	}
+	if out, err = runCapability(t, "verify"); err != nil || !strings.Contains(out, "journal verified: 2 entries") {
+		t.Fatalf("verify = %q, %v", out, err)
+	}
+}
+
+func TestALocalCheckUsesTheSnapshotNameOfThisMachine(t *testing.T) {
+	useTempAxisHome(t)
+	facts := sampleFacts(sampleHardware)
+	facts.Hostname = "alpha-workstation.example"
+	fakeHardware(t, facts, nil, sampleHardware, nil)
+	prev := capabilitySnapshotNodes
+	t.Cleanup(func() { capabilitySnapshotNodes = prev })
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) {
+		return []models.NodeFacts{{Name: "Alpha", Hostname: "alpha-workstation"}}, nil
+	}
+	if obs := checkFactsHardware(context.Background(), ""); obs.Subject != "node:alpha" {
+		t.Fatalf("subject = %q, want the snapshot name node:alpha", obs.Subject)
+	}
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) { return nil, errors.New("no daemon") }
+	if obs := checkFactsHardware(context.Background(), ""); obs.Subject != "node:alpha-workstation" {
+		t.Fatalf("subject without a snapshot = %q, want the hostname", obs.Subject)
 	}
 }

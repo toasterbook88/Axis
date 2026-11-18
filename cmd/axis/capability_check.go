@@ -74,9 +74,7 @@ func checkFactsHardware(ctx context.Context, node string) capability.Observation
 		obs.Claim = capabilityClaim("the AXIS fact collector failed: " + why)
 		return obs
 	}
-	if host := shortHostname(nf.Hostname); host != "" {
-		obs.Subject = "node:" + host
-	}
+	obs.Subject = localSubject(ctx, nf.Hostname)
 	axis := hardwareReading{
 		OS: strings.ToLower(nf.OS), Arch: normalizeArch(nf.Arch), Cores: nf.Resources.CPUCores,
 		RAMTotalMB: nf.Resources.RAMTotalMB, DiskTotalGB: nf.Resources.DiskTotalGB,
@@ -148,6 +146,25 @@ func normalizeArch(arch string) string {
 		return "arm64"
 	}
 	return arch
+}
+
+// localSubject names this machine the way --node checks do: the snapshot name
+// of the node whose recorded hostname is this machine's, so a failure found
+// locally and a pass found with --node meet on one subject. It falls back to
+// the OS hostname when the snapshot is unavailable or lists no such node.
+func localSubject(ctx context.Context, hostname string) string {
+	host := shortHostname(hostname)
+	if nodes, err := capabilitySnapshotNodes(ctx); err == nil {
+		for _, n := range nodes {
+			if host != "" && (shortHostname(n.Hostname) == host || shortHostname(n.Name) == host) {
+				return nodeSubject(n.Name)
+			}
+		}
+	}
+	if host == "" {
+		return ""
+	}
+	return "node:" + host
 }
 
 func shortHostname(host string) string {
