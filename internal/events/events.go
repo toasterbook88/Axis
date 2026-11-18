@@ -83,6 +83,20 @@ const (
 
 	// EventSnapshotCollected is a general event when a cluster snapshot has been collected.
 	EventSnapshotCollected = "snapshot.collected"
+
+	// --- Capability record ---
+
+	// EventCapabilityPromoted is emitted when a capability earns a higher level.
+	EventCapabilityPromoted = "capability.promoted"
+
+	// EventCapabilityDemoted is emitted when a capability loses a level.
+	EventCapabilityDemoted = "capability.demoted"
+
+	// EventCapabilityCeilingChanged is emitted when an operator moves a capability's ceiling.
+	EventCapabilityCeilingChanged = "capability.ceiling.changed"
+
+	// EventCapabilityFailureResolved is emitted when an operator closes one subject's open failure.
+	EventCapabilityFailureResolved = "capability.failure.resolved"
 )
 
 // cortexDaemonTelemetryEvents are high-frequency Axis daemon lifecycle names.
