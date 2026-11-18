@@ -126,6 +126,7 @@ func TestConsultModelClosesResolverCleanup(t *testing.T) {
 }
 
 func TestConsultModelSameResolvedIDIsSingleSlot(t *testing.T) {
+	isolateConsultSlots(t)
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
@@ -150,6 +151,7 @@ func TestConsultModelSameResolvedIDIsSingleSlot(t *testing.T) {
 }
 
 func TestConsultModelDifferentResolvedIDsMayOverlap(t *testing.T) {
+	isolateConsultSlots(t)
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))

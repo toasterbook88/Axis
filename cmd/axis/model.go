@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -714,16 +713,12 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 		return placeMLXModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
 	}
 
-	if gpuIdx, res, freeGPU, occupied := findResidentGPUConflict(nf, profile); occupied {
+	if gpuIdx, res, occupied := findResidentGPUConflict(nf); occupied {
 		portDetail := ""
 		if res.Port > 0 {
 			portDetail = fmt.Sprintf(" on port %d", res.Port)
 		}
-		hint := ""
-		if freeGPU != nil {
-			hint = fmt.Sprintf("; pass --main-gpu %d to target a free GPU", *freeGPU)
-		}
-		errMsg := fmt.Sprintf("GPU %d already occupied by resident model %q (%s%s)%s", gpuIdx, res.Name, res.Runtime, portDetail, hint)
+		errMsg := fmt.Sprintf("GPU %d already occupied by resident model %q (%s%s); llama-server launch does not isolate GPU devices", gpuIdx, res.Name, res.Runtime, portDetail)
 		exitMsg := fmt.Sprintf("refusing to start model on %s GPU %d: %s", nf.Name, gpuIdx, errMsg)
 		return rejectModelStart(cmd, snap, source, nf, profile, &gpuIdx, startedAt, "gpu_occupied", errMsg, exitMsg, format)
 	}
@@ -2281,78 +2276,13 @@ func rejectModelStart(
 	}
 }
 
-func findResidentGPUConflict(nf models.NodeFacts, profile models.ModelRunProfile) (int, models.ResidentModel, *int, bool) {
-	var targetGPU int
-	if profile.DeviceIndex != nil {
-		targetGPU = *profile.DeviceIndex
-	} else {
-		dev := models.ObserveLaunchDevice(nf)
-		if dev.Kind != models.DeviceKindDiscrete {
-			return 0, models.ResidentModel{}, nil, false
-		}
-		targetGPU = defaultDiscreteGPUIndex(nf)
-	}
-
+func findResidentGPUConflict(nf models.NodeFacts) (int, models.ResidentModel, bool) {
+	// The argv does not restrict visible devices: --main-gpu alone does not
+	// isolate a launch. Any observed resident GPU can therefore overlap it.
 	for _, res := range nf.ResidentModels {
-		if !slices.Contains(res.GPUIndices, targetGPU) {
-			continue
-		}
-		var free *int
-		if profile.DeviceIndex == nil {
-			free = firstFreeDiscreteGPUIndex(nf)
-		}
-		return targetGPU, res, free, true
-	}
-	return 0, models.ResidentModel{}, nil, false
-}
-
-func isDiscreteGPU(gpu models.GPUInfo) bool {
-	return gpu.HasCapability("cuda") || gpu.HasCapability("rocm") ||
-		strings.EqualFold(gpu.Vendor, "nvidia") || strings.EqualFold(gpu.Vendor, "amd")
-}
-
-func defaultDiscreteGPUIndex(nf models.NodeFacts) int {
-	if nf.Resources == nil {
-		return 0
-	}
-	var firstObserved *int
-	for _, gpu := range nf.Resources.GPUs {
-		if !isDiscreteGPU(gpu) || gpu.Index == nil {
-			continue
-		}
-		if *gpu.Index == 0 {
-			return 0
-		}
-		if firstObserved == nil {
-			idx := *gpu.Index
-			firstObserved = &idx
+		if len(res.GPUIndices) > 0 {
+			return res.GPUIndices[0], res, true
 		}
 	}
-	if firstObserved != nil {
-		return *firstObserved
-	}
-	return 0
-}
-
-func firstFreeDiscreteGPUIndex(nf models.NodeFacts) *int {
-	if nf.Resources == nil {
-		return nil
-	}
-	for _, gpu := range nf.Resources.GPUs {
-		if !isDiscreteGPU(gpu) || gpu.Index == nil {
-			continue
-		}
-		occupied := false
-		for _, res := range nf.ResidentModels {
-			if slices.Contains(res.GPUIndices, *gpu.Index) {
-				occupied = true
-				break
-			}
-		}
-		if !occupied {
-			idx := *gpu.Index
-			return &idx
-		}
-	}
-	return nil
+	return 0, models.ResidentModel{}, false
 }
