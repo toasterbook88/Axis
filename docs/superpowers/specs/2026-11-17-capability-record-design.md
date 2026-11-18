@@ -213,3 +213,13 @@ Verdict: revise
 1. Major: when the local probe stopped early, the check threw away the readings it had taken, so a measured CPU mismatch next to a failed statfs was inconclusive instead of a failure. Fixed in d3b57c85: the taken readings are compared, a mismatch among them fails, and otherwise the result is inconclusive and names the probe error; two TestFactsHardwareCheckerVerdicts cases, both failing on the old code.
 
 2. Minor: check --format json printed the observation before the store stamped it, so its time, actor, origin and counted were empty while the journal held them. Fixed in d3b57c85: Record and RecordCheck also return the observation as committed and the command prints it; TestCapabilityCheckJSONMatchesTheJournal.
+
+Kind: diff
+Reviewer: the author, re-reviewing the two fresh-context findings only (at the maintainer's direction; the reviewer has also been asked)
+Model: Anthropic Claude
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: 28501fc3e1f1b21da18b4cb4cf98d8356c96b39a
+Date: 2026-11-18
+Verdict: approve
+
+Note: In a fresh clone, the reviewer's own two probe tests, copied in unchanged (TestReviewPartialLocalProbeKeepsMeasuredMismatch and TestReviewCheckJSONMatchesJournalObservation), pass at Head and fail at the reviewed head b7afa936. With the old capability_check.go restored, the two new TestFactsHardwareCheckerVerdicts cases fail. The full hermetic suite passes at Head. This re-review is not independent.
