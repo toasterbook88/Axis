@@ -252,9 +252,8 @@ that could not run makes the result inconclusive.`,
 			var results []map[string]any
 			for _, target := range targets {
 				nodeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-				obs := run(nodeCtx, target)
+				rec, obs, transition, err := store.RecordCheck(run(nodeCtx, target), policies)
 				cancel()
-				rec, transition, err := store.RecordCheck(obs, policies)
 				if err != nil {
 					return err
 				}
@@ -318,7 +317,7 @@ the probe. Passes that count come from Axis's own checkers
 			if err != nil {
 				return err
 			}
-			rec, transition, err := capability.Open(capability.Dir()).Record(obs, policies)
+			rec, _, transition, err := capability.Open(capability.Dir()).Record(obs, policies)
 			if err != nil {
 				return err
 			}

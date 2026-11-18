@@ -31,7 +31,7 @@ func passes(t *testing.T, s *Store, n int) Record {
 	var rec Record
 	for i := 0; i < n; i++ {
 		var err error
-		if rec, _, err = s.RecordCheck(checked(OutcomePass), fastPolicy); err != nil {
+		if rec, _, _, err = s.RecordCheck(checked(OutcomePass), fastPolicy); err != nil {
 			t.Fatalf("RecordCheck %d: %v", i+1, err)
 		}
 	}
@@ -108,7 +108,7 @@ func TestPassesReportedFromOutsideAreKeptButNeverCount(t *testing.T) {
 		o := checked(OutcomePass)
 		o.Origin = OriginChecker // the caller cannot choose its origin
 		var err error
-		if rec, _, err = s.Record(o, fastPolicy); err != nil {
+		if rec, _, _, err = s.Record(o, fastPolicy); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestPassesReportedFromOutsideAreKeptButNeverCount(t *testing.T) {
 func TestFailuresReportedFromOutsideCount(t *testing.T) {
 	s := newStore(t)
 	passes(t, s, 10)
-	rec, tr, err := s.Record(Observation{Capability: "facts.hardware", Outcome: OutcomeFail,
+	rec, _, tr, err := s.Record(Observation{Capability: "facts.hardware", Outcome: OutcomeFail,
 		Evidence: Evidence{Kind: EvidencePeer, Ref: "an agent saw it fail"}}, fastPolicy)
 	if err != nil || rec.Level != LevelUnproven || tr == nil || tr.Kind != TransitionDemoted {
 		t.Fatalf("record = %+v, transition %+v, %v", rec, tr, err)
@@ -136,7 +136,7 @@ func TestTheStoreStampsTheTime(t *testing.T) {
 	s := newStore(t)
 	o := checked(OutcomePass)
 	o.At = t0.Add(-365 * 24 * time.Hour) // a caller trying to backdate
-	rec, _, err := s.RecordCheck(o, fastPolicy)
+	rec, _, _, err := s.RecordCheck(o, fastPolicy)
 	if err != nil || !rec.LastObserved.Equal(t0.Add(time.Hour)) {
 		t.Fatalf("the store must stamp the time, got %v (%v)", rec.LastObserved, err)
 	}
@@ -146,7 +146,7 @@ func TestOnlyTheAxisActorHoldsARecord(t *testing.T) {
 	s := newStore(t)
 	o := checked(OutcomePass)
 	o.Actor = "agent:codex"
-	if _, _, err := s.RecordCheck(o, fastPolicy); err == nil {
+	if _, _, _, err := s.RecordCheck(o, fastPolicy); err == nil {
 		t.Fatal("an agent actor must be refused until identities are verified")
 	}
 	if _, err := os.Stat(s.path(journalFile)); err == nil {
@@ -154,7 +154,7 @@ func TestOnlyTheAxisActorHoldsARecord(t *testing.T) {
 	}
 	o = checked(OutcomePass)
 	o.Checker = ""
-	if _, _, err := s.RecordCheck(o, fastPolicy); err == nil {
+	if _, _, _, err := s.RecordCheck(o, fastPolicy); err == nil {
 		t.Fatal("a checker observation must name its checker")
 	}
 }
@@ -247,7 +247,7 @@ func TestReplayRefusesAnEntryNotInNormalForm(t *testing.T) {
 	if err := s.appendJournal(line); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "normal form") {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "normal form") {
 		t.Fatalf("catching up over an entry with no actor = %v", err)
 	}
 	if v, err := s.Verify(); err != nil || v.OK {
@@ -316,7 +316,7 @@ func TestVerifyCatchesEditsAndTruncation(t *testing.T) {
 	expectProblem("a removed line", "out of order")
 
 	_ = os.WriteFile(journalPath, []byte(lines[0]), 0o600)
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
 		t.Fatal("writing onto a truncated journal must fail")
 	}
 	expectProblem("a truncated journal", "the state counts 3 journal entries but the journal holds 1")
@@ -328,7 +328,7 @@ func TestAnIncompleteLastJournalLineIsAnError(t *testing.T) {
 	f, _ := os.OpenFile(s.path(journalFile), os.O_APPEND|os.O_WRONLY, 0o600)
 	_, _ = f.WriteString(`{"seq":2`)
 	_ = f.Close()
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "incomplete line") {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "incomplete line") {
 		t.Fatalf("RecordCheck onto a torn journal = %v", err)
 	}
 	if v, err := s.Verify(); err != nil || v.OK {
@@ -340,7 +340,7 @@ func TestAMissingJournalIsAnError(t *testing.T) {
 	s := newStore(t)
 	passes(t, s, 2)
 	_ = os.Remove(s.path(journalFile))
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "is missing") {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil || !strings.Contains(err.Error(), "is missing") {
 		t.Fatalf("RecordCheck with the journal gone = %v", err)
 	}
 	if v, err := s.Verify(); err != nil || v.OK {
@@ -357,7 +357,7 @@ func TestACorruptStateIsAnErrorAndIsLeftInPlace(t *testing.T) {
 	if _, err := s.Load(); err == nil {
 		t.Fatal("a corrupt state must not load as empty")
 	}
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
 		t.Fatal("recording onto a corrupt state must fail")
 	}
 	if data, _ := os.ReadFile(s.path(stateFile)); string(data) != "{not json" {
@@ -381,7 +381,7 @@ func TestBadObservationsAreRefusedAndChangeNothing(t *testing.T) {
 	} {
 		o := checked(OutcomePass)
 		mutate(&o)
-		if _, _, err := s.Record(o, fastPolicy); err == nil {
+		if _, _, _, err := s.Record(o, fastPolicy); err == nil {
 			t.Errorf("%s: a bad observation was recorded", name)
 		}
 	}
@@ -399,7 +399,7 @@ func TestReportListsObservedAndUnobservedCapabilitiesInRungOrder(t *testing.T) {
 		"health.service": {ID: "health.service", Rung: 2},
 	}
 	for i := 0; i < 2; i++ {
-		if _, _, err := s.RecordCheck(checked(OutcomePass), pols); err != nil {
+		if _, _, _, err := s.RecordCheck(checked(OutcomePass), pols); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -421,13 +421,13 @@ func TestResolveClosesOneOpenFailureForAMachineThatIsGone(t *testing.T) {
 	s := newStore(t)
 	failing := checked(OutcomeFail)
 	failing.Subject = "node:gone"
-	if _, _, err := s.RecordCheck(failing, fastPolicy); err != nil {
+	if _, _, _, err := s.RecordCheck(failing, fastPolicy); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 20; i++ { // a long healthy streak elsewhere cannot promote past it
 		o := checked(OutcomePass)
 		o.Subject = "node:alpha"
-		if rec, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr != nil || len(rec.OpenFailures) != 1 {
+		if rec, _, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr != nil || len(rec.OpenFailures) != 1 {
 			t.Fatalf("pass %d: %+v %+v %v", i+1, rec, tr, err)
 		}
 	}
@@ -446,7 +446,7 @@ func TestResolveClosesOneOpenFailureForAMachineThatIsGone(t *testing.T) {
 	}
 	o := checked(OutcomePass)
 	o.Subject = "node:alpha"
-	if rec, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr == nil || rec.Level != LevelAdvisory {
+	if rec, _, tr, err := s.RecordCheck(o, fastPolicy); err != nil || tr == nil || rec.Level != LevelAdvisory {
 		t.Fatalf("with the failure closed the next pass must promote: %+v %+v %v", rec, tr, err)
 	}
 	if v, err := s.Verify(); err != nil || !v.OK {
@@ -475,7 +475,7 @@ func TestVerifyFindsAndRepairsALostTransition(t *testing.T) {
 	if err := os.Mkdir(s.path(transitionsFile), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
+	if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err == nil {
 		t.Fatal("a failed transitions write must be reported")
 	}
 	if err := os.Remove(s.path(transitionsFile)); err != nil {
@@ -510,7 +510,7 @@ func TestConcurrentWritersNeverLoseOrRepeatAnEntry(t *testing.T) {
 			defer wg.Done()
 			s := Open(dir) // its own store, as separate processes would have
 			for i := 0; i < each; i++ {
-				if _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err != nil {
+				if _, _, _, err := s.RecordCheck(checked(OutcomePass), fastPolicy); err != nil {
 					errs <- err
 				}
 			}

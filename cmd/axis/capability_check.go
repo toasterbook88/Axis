@@ -59,10 +59,10 @@ func checkFactsHardware(ctx context.Context, node string) capability.Observation
 		return checkFactsHardwareNode(ctx, node)
 	}
 	obs := capability.Observation{Capability: "facts.hardware", Checker: factsHardwareChecker, Outcome: capability.OutcomeInconclusive}
-	probe, ref, err := capabilityProbeHardware()
+	probe, ref, probeErr := capabilityProbeHardware()
 	obs.Evidence = capability.Evidence{Kind: capability.EvidenceLiveProbe, Ref: ref}
-	if err != nil {
-		obs.Claim = capabilityClaim("the independent probe failed: " + err.Error())
+	if probeErr != nil && probe == (hardwareReading{}) {
+		obs.Claim = capabilityClaim("the independent probe failed: " + probeErr.Error())
 		return obs
 	}
 	nf, err := capabilityCollectLocal(ctx)
@@ -79,7 +79,14 @@ func checkFactsHardware(ctx context.Context, node string) capability.Observation
 		OS: strings.ToLower(nf.OS), Arch: normalizeArch(nf.Arch), Cores: nf.Resources.CPUCores,
 		RAMTotalMB: nf.Resources.RAMTotalMB, DiskTotalGB: nf.Resources.DiskTotalGB,
 	}
-	return judgeHardware(obs, axis, probe)
+	// A probe that stopped early still took some readings: a mismatch among
+	// them is a failure; otherwise the result is inconclusive.
+	obs = judgeHardware(obs, axis, probe)
+	if probeErr != nil && obs.Outcome != capability.OutcomeFail {
+		obs.Outcome = capability.OutcomeInconclusive
+		obs.Claim = capabilityClaim(obs.Claim + "; the independent probe stopped early: " + probeErr.Error())
+	}
+	return obs
 }
 
 // judgeHardware decides facts.hardware from the two readings. The evidence

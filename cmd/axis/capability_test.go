@@ -329,3 +329,29 @@ func TestALocalCheckUsesTheSnapshotNameOfThisMachine(t *testing.T) {
 		t.Fatalf("subject without a snapshot = %q, want the hostname", obs.Subject)
 	}
 }
+
+func TestCapabilityCheckJSONMatchesTheJournal(t *testing.T) {
+	home := useTempAxisHome(t)
+	fakeHardware(t, sampleFacts(sampleHardware), nil, sampleHardware, nil)
+	out, err := runCapability(t, "check", "facts.hardware", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Observation capability.Observation `json:"observation"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, "capability", "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry capability.JournalEntry
+	if err := json.Unmarshal(b, &entry); err != nil {
+		t.Fatal(err)
+	}
+	if result.Observation != *entry.Observation || result.Observation.At.IsZero() || result.Observation.Counted == "" {
+		t.Fatalf("check --format json printed %+v; the journal holds %+v", result.Observation, *entry.Observation)
+	}
+}

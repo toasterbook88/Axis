@@ -82,34 +82,37 @@ func emptyState() State {
 
 // Record adds an observation reported from outside Axis. Axis did not run its
 // probe, so a pass is kept and counted as inconclusive; a failure counts.
-func (s *Store) Record(obs Observation, policies Policies) (Record, *Transition, error) {
+//
+// It returns the record, the observation as the store committed it (stamped
+// with its time, actor, origin and whether it counted) and any transition.
+func (s *Store) Record(obs Observation, policies Policies) (Record, Observation, *Transition, error) {
 	obs.Origin = OriginExternal
 	return s.commitObservation(obs, policies)
 }
 
 // RecordCheck adds an observation produced by one of Axis's own checkers.
-func (s *Store) RecordCheck(obs Observation, policies Policies) (Record, *Transition, error) {
+func (s *Store) RecordCheck(obs Observation, policies Policies) (Record, Observation, *Transition, error) {
 	obs.Origin = OriginChecker
 	if strings.TrimSpace(obs.Checker) == "" {
-		return Record{}, nil, errors.New("a checker observation must name its checker")
+		return Record{}, Observation{}, nil, errors.New("a checker observation must name its checker")
 	}
 	return s.commitObservation(obs, policies)
 }
 
-func (s *Store) commitObservation(obs Observation, policies Policies) (Record, *Transition, error) {
+func (s *Store) commitObservation(obs Observation, policies Policies) (Record, Observation, *Transition, error) {
 	obs, err := obs.Normalize()
 	if err != nil {
-		return Record{}, nil, err
+		return Record{}, Observation{}, nil, err
 	}
 	release, err := persist.LockFile(s.path(stateFile))
 	if err != nil {
-		return Record{}, nil, err
+		return Record{}, Observation{}, nil, err
 	}
 	defer release()
 
 	st, caught, err := s.loadForWrite()
 	if err != nil {
-		return Record{}, nil, err
+		return Record{}, Observation{}, nil, err
 	}
 	// The store, not the caller, says when an observation happened: a caller
 	// that could backdate observations could fake the span a promotion needs.
@@ -119,13 +122,13 @@ func (s *Store) commitObservation(obs Observation, policies Policies) (Record, *
 	th := policies.For(obs.Capability).Thresholds()
 	trs, err := s.commit(&st, JournalEntry{Kind: EntryObservation, Observation: &obs, Thresholds: &th}, caught, now)
 	if err != nil {
-		return Record{}, nil, err
+		return Record{}, Observation{}, nil, err
 	}
 	var tr *Transition
 	if len(trs) > 0 {
 		tr = &trs[0]
 	}
-	return *st.Capabilities[Key(obs.Capability, obs.Actor)], tr, nil
+	return *st.Capabilities[Key(obs.Capability, obs.Actor)], obs, tr, nil
 }
 
 // SetCeiling sets the highest level a capability may reach.
