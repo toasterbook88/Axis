@@ -2,7 +2,8 @@
 
 Date: 2026-11-17. Status: implemented on `feat/capability-record`; spec review approve-with-changes,
 both findings fixed. This spec was written after the code, which is out of order under AGENTS.md §8;
-the PR says so and asks the maintainer to rule on it.
+the maintainer accepted that order in writing on PR #659 on 2026-11-18, because the spec has since had
+fresh-context review that changed the design.
 
 ## Problem
 
@@ -60,14 +61,18 @@ Storage, under `~/.axis/capability/`:
   the state is written.
 - `state.json`: a cache of replaying the journal, with `next_seq`, `head` and `journal_bytes`. A write
   that stopped after the journal is counted on the next write, without reusing a sequence number.
-- `transitions.jsonl`: a derived log of level and ceiling changes for readers.
+- `transitions.jsonl`: a derived log of level and ceiling changes for readers. It is appended after the
+  state is saved, so a failed append can lose a transition from it; `verify` compares it with the
+  transitions a replay of the journal produces, and `verify --repair-transitions` rebuilds it from the
+  journal without touching the journal or the state.
 - Policy (thresholds and descriptions only) is read from `~/.axis/capabilities.yaml`; a policy below the
   floors is refused, and the state machine raises any thresholds it is given to the floors.
 
 Checkers: `facts.hardware` compares OS, architecture, CPU count, RAM total and root disk total;
 `facts.gpu` compares the NVIDIA GPUs AXIS lists with what the NVIDIA driver shows under
 `/proc/driver/nvidia`, fails any GPU entry whose model is an error message, and passes when AXIS lists
-no NVIDIA GPU and no NVIDIA driver is loaded. Without `--node`, a check runs the fact collector on this
+no NVIDIA GPU and no NVIDIA driver is loaded. A driver GPU entry the probe cannot read makes the check
+inconclusive, since the GPU count is then unknown. Without `--node`, a check runs the fact collector on this
 machine against system calls; with `--node`/`--all-nodes` (and `--except` to leave machines out) it
 compares the node's entry in the
 published snapshot with a read-only shell probe run over the AXIS SSH transport. A node AXIS reports
@@ -82,7 +87,8 @@ emitted as `capability.promoted`, `capability.demoted`, `capability.ceiling.chan
 
 Tests: `internal/capability/*_test.go` (state machine edges, floors, span, open failures, journal
 chain, catch-up after an interrupted write, verify against edited, removed and truncated lines, torn
-last line, concurrent writers through the store lock), `cmd/axis/capability*_test.go` (each command,
+last line, a lost transitions write found and repaired, four concurrent writers through the store lock
+in TestConcurrentWritersNeverLoseOrRepeatAnEntry), `cmd/axis/capability*_test.go` (each command,
 structured output, event emission, checker verdicts, node mode with a stubbed snapshot and probe).
 
 ## Alternatives
@@ -159,3 +165,26 @@ Verdict: approve-with-changes
 Questions:
 
 - Does an author review count toward the diff reviews section 8 asks of a change this size? Open: it is not independent; it is recorded because the maintainer asked for it while the requested fresh-context diff reviews had not started, and the maintainer decides whether it counts.
+
+Kind: spec
+Reviewer: fresh-context session (Hermes agent)
+Model: not stated by the reviewer
+Base: 4465fa4a81a14c19fbfbdca00feed2f976da0e0e
+Head: 8c1509f72af4599b1aa81e8480d7bb4b11b90cd2
+Date: 2026-11-17
+Verdict: revise
+
+1. Blocker: the spec had no review record and failed the spec gate. Fixed in 99b76538: the first spec review is recorded above and verify-specs passes.
+
+2. Blocker: the spec was written after the code, which needs the maintainer's written acceptance. Fixed in this file: the maintainer accepted the order on PR #659 on 2026-11-18, and the Status line cites it.
+
+3. Major: local checks named the subject by hostname and node checks by snapshot name, so an open failure could never close on a node whose names differ. Fixed in e55568cf: local checks take the snapshot name of this machine; the same finding as the first spec review's second.
+
+4. Major: a failed `transitions.jsonl` append after the state save lost a level or ceiling change from the derived log for good, silently. Fixed in 7436eca8: `verify` compares the log with the journal replay and `verify --repair-transitions` rebuilds it; TestVerifyFindsAndRepairsALostTransition injects the failed write.
+
+5. Major: the spec claimed a concurrent-writers test that did not exist. Fixed in 7436eca8: TestConcurrentWritersNeverLoseOrRepeatAnEntry runs four stores on one directory and checks 100 unique sequence numbers and a clean verify, under the race detector.
+
+Questions:
+
+- Should a driver GPU entry the probe cannot read make `facts.gpu` fail? Verified: it should not; the probe now reports it and the check is inconclusive, fixed in 7436eca8 with a TestJudgeGPU case.
+- Does raising the ceiling after lowering it keep the old open failures? Verified: yes, by design, since open failures record evidence rather than level; TestCeilingChanges now asserts it.
