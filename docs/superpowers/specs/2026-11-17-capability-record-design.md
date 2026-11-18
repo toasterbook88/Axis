@@ -201,3 +201,15 @@ Date: 2026-11-18
 Verdict: approve
 
 Note: In a fresh clone at Head, each Hermes finding and question was rerun: verify-specs failed only on this missing re-review, the Status line cites the maintainer's acceptance, and the tests for findings 3 to 5 and both questions pass, the concurrency test under the race detector. Two mutations confirmed the new tests can fail: with verify no longer checking transitions.jsonl, TestVerifyFindsAndRepairsALostTransition fails; with the store lock removed, TestConcurrentWritersNeverLoseOrRepeatAnEntry fails at once. This re-review is not independent.
+
+Kind: diff
+Reviewer: fresh-context subagent run by the Codex agent
+Model: OpenAI GPT (version not stated by the reviewer)
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: b7afa9361806f239613ceda19246469a0a72bec8
+Date: 2026-11-17
+Verdict: revise
+
+1. Major: when the local probe stopped early, the check threw away the readings it had taken, so a measured CPU mismatch next to a failed statfs was inconclusive instead of a failure. Fixed in d3b57c85: the taken readings are compared, a mismatch among them fails, and otherwise the result is inconclusive and names the probe error; two TestFactsHardwareCheckerVerdicts cases, both failing on the old code.
+
+2. Minor: check --format json printed the observation before the store stamped it, so its time, actor, origin and counted were empty while the journal held them. Fixed in d3b57c85: Record and RecordCheck also return the observation as committed and the command prints it; TestCapabilityCheckJSONMatchesTheJournal.
