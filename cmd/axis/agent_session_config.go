@@ -23,6 +23,8 @@ type agentSessionParams struct {
 	ContextWindow           int // the active target's served window; 0 = unknown
 	AutoApprove             bool
 	Autonomy                agent.AutonomyMode
+	EagerTools              []string
+	DisableToolDeferral     bool
 	SystemExtra             string
 	Verbose                 bool
 	DryRun                  bool
@@ -56,6 +58,8 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 		ContextWindow:           p.ContextWindow,
 		AutoApprove:             p.AutoApprove,
 		Autonomy:                p.Autonomy,
+		EagerTools:              p.EagerTools,
+		DisableToolDeferral:     p.DisableToolDeferral,
 		SystemExtra:             p.SystemExtra,
 		Verbose:                 p.Verbose,
 		DryRun:                  p.DryRun,
