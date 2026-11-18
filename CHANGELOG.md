@@ -1,3 +1,61 @@
+## v0.26.0 (2026-11-18)
+
+`axis capability` records how often AXIS's own facts prove true; `axis agent`
+defers external MCP tool schemas behind `tool_search` and `tool_call` and asks
+for a delegation brief before it spawns a child; GPU facts no longer read an
+`nvidia-smi` failure message as a GPU.
+
+### Features
+
+* `axis capability` keeps an append-only, hash-chained record of how often
+  AXIS's facts prove true. Built-in checkers (`facts.hardware`, `facts.gpu`,
+  on this machine or with `--node` / `--all-nodes`) compare the published facts
+  with an independent probe. A level rises one step at a time, only on checker
+  passes over a minimum span with no open failure on any machine, and any
+  counted failure lowers it at once. `record`, `ceiling`, `resolve`, `verify`
+  and `export` complete the command. The record is advisory: no AXIS surface
+  reads a level to allow or refuse an action (#659).
+* `axis agent` defers permitted external MCP tool schemas behind `tool_search`
+  and `tool_call` by default. Built-in tools stay eager, and `--eager-tools`
+  names the tools to keep eager. The system-prompt catalog is bounded to 2400
+  bytes (#649).
+* `spawn_subagent` requires a delegation brief (`objective`, `output_format`,
+  `sources`, `boundary`) alongside `prompt`, and carries it into the child's
+  system prompt (#648).
+
+### Fixes
+
+* GPU facts never read an `nvidia-smi` failure message as a GPU. On a machine
+  whose NVIDIA driver was not loaded, the message (which names NVIDIA) became a
+  CUDA GPU in the snapshot. Remote collection and the fact bundle now take only
+  `nvidia-smi` data rows and fall back to `lspci` only when none were printed
+  (#658).
+* `axis model start` refuses to launch on a GPU that already holds a resident
+  model; a different `--main-gpu` no longer bypasses the check (#656).
+* `axis doctor` HTTP MCP probes resolve and validate the exact addresses they
+  dial within the endpoint's time budget, race checked addresses across address
+  families, and ignore environment proxies, so neither a proxy nor a second DNS
+  answer can send a probe somewhere unchecked (#656).
+* Cancelling a cloud consult no longer waits on runtime credential resolution
+  (#654).
+
+### Documentation
+
+* README, `SECURITY.md` and the release notes name v0.25.0.
+  `hack/verify-release-claims.sh`, run by `verify-doc-facts.sh`, fails when
+  they pin a release older than the newest tag or the one before it (#657).
+* Agent instructions say which persisted stores are quarantined when corrupt,
+  and the repository's Claude Code settings deny more commands that discard
+  local work (#655).
+
+### Tests
+
+* The router's dead-upstream fixture keeps its port until the test ends, so a
+  later test server can no longer take it and answer as healthy (#662).
+* Agent, command and API tests pass when run twice in one process and no longer
+  fail on a slow race-detector runner; the reservation tests no longer write
+  the developer's real `~/.axis/ledger.json` (#663).
+
 ## v0.25.0 (2026-11-16)
 
 `axis agent` can consult a second model and cloud streams fail fast when idle;
