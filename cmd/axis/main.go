@@ -171,6 +171,8 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 	cmdObservations := observationsCmd()
 	cmdObservations.GroupID = "task"
 	cmdObservations.Hidden = true
+	cmdCapability := capabilityCmd()
+	cmdCapability.GroupID = "task"
 	cmdModel := modelCmd()
 	cmdModel.GroupID = "ai"
 	cmdMcp.Hidden = true
@@ -208,6 +210,7 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 	root.AddCommand(cmdSummary)
 	root.AddCommand(cmdReservations)
 	root.AddCommand(cmdObservations)
+	root.AddCommand(cmdCapability)
 	root.AddCommand(cmdModel)
 
 	ui.ApplyHelpTemplate(root)
