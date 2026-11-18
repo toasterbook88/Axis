@@ -247,3 +247,13 @@ Verdict: revise
 2. Major: a local probe that stopped early discarded the readings it had taken. Fixed in d3b57c85: reviewer A's first finding.
 
 3. Minor: structured check output printed the unstamped observation. Fixed in d3b57c85: reviewer A's second finding.
+
+Kind: spec
+Reviewer: fresh-context session (Hermes agent), re-review of its own findings
+Model: not stated by the reviewer
+Base: 60eba8a04a8cd79a6bfcf612c293ff3a4f645a4f
+Head: 6ace14182fa9e99fc6b40cfdc6c396e48e4508c9
+Date: 2026-11-17
+Verdict: approve
+
+Note: Each Hermes finding and both questions were checked at Head in a read-only clone (spec review record, the maintainer's acceptance, local and node subjects, transitions repair, concurrent writers under the race detector, unreadable driver entry, ceiling raise); no findings; the full hermetic suite passes. This is the reviewer's own re-review, independent of the author's re-review above.
