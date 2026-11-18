@@ -46,6 +46,8 @@ func agentCmd() *cobra.Command {
 		maxTurns                int
 		autoApprove             bool
 		autonomy                string
+		eagerTools              []string
+		disableToolDeferral     bool
 		systemMsg               string
 		resume                  bool
 		verbose                 bool
@@ -136,7 +138,8 @@ func agentCmd() *cobra.Command {
 					a, err = runAgentConsoleStartup(ctx, agentStartupInputs{
 						model: model, role: roleFlag, provider: provider, cloudModel: cloudModel, cheapModel: cheapModel,
 						systemMsg: systemMsg, maxTurns: maxTurns, maxTokens: maxTokens, timeout: timeout,
-						autoApprove: autoApprove, autonomy: autonomy, verbose: verbose, dryRun: dryRun,
+						autoApprove: autoApprove, autonomy: autonomy, eagerTools: eagerTools, disableToolDeferral: disableToolDeferral,
+						verbose: verbose, dryRun: dryRun,
 						allowRawCommandEvidence: allowRawCommandEvidence, resume: resume, selectModel: selectModel,
 						live: live, out: cmd.OutOrStdout(),
 					}, cmd.ErrOrStderr())
@@ -239,6 +242,8 @@ func agentCmd() *cobra.Command {
 				Confirm:                 confirmForPipedMode(printMode, errW),
 				AutoApprove:             autoApprove,
 				Autonomy:                agent.AutonomyMode(autonomy),
+				EagerTools:              eagerTools,
+				DisableToolDeferral:     disableToolDeferral,
 				SystemExtra:             systemMsg,
 				Verbose:                 verbose,
 				DryRun:                  dryRun,
@@ -321,6 +326,8 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 25, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70). consult_model still asks")
 	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: cluster (AXIS cluster reads only), default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but specific safety risks, safety-blocked commands, unlisted MCP tools, and consult_model)")
+	cmd.Flags().StringSliceVar(&eagerTools, "eager-tools", nil, "Comma-separated allowlist of permitted tool names kept eager in requests (demotes other permitted tools behind tool_search/tool_call)")
+	cmd.Flags().BoolVar(&disableToolDeferral, "no-defer-tools", false, "Disable deferred tool loading and send all permitted non-bridge tool schemas on every round")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Emit trace output for tool calls and turns")

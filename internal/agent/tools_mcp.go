@@ -47,6 +47,10 @@ func (r *ToolRegistry) RegisterMCPTools(mcpRegistry *mcpclient.Registry) {
 			}
 			r.mcpAutoApproved[agentToolName] = true
 		}
+		if r.mcpServers == nil {
+			r.mcpServers = make(map[string]string)
+		}
+		r.mcpServers[agentToolName] = server
 
 		r.add(agentToolName, entry.Tool.Description, json.RawMessage(paramSchema), func(ctx context.Context, args json.RawMessage) (string, error) {
 			var mcpArgs map[string]any

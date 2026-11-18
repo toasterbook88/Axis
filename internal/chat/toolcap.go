@@ -31,6 +31,12 @@ func toolResultCap(maxChars int) int {
 	return max(toolResultCapFloor, maxTokens)
 }
 
+// ToolResultCap returns the byte limit Conversation.Append enforces on a
+// single RoleTool message for a conversation configured with maxTokens.
+func ToolResultCap(maxTokens int) int {
+	return toolResultCap(maxTokens * 4)
+}
+
 // asSent replaces each invalid UTF-8 byte with U+FFFD, as encoding/json does
 // when the request is sent, so the cap measures what the model receives.
 func asSent(s string) string {

@@ -91,6 +91,8 @@ type agentStartupInputs struct {
 	timeout                                       time.Duration
 	autoApprove                                   bool
 	autonomy                                      string
+	eagerTools                                    []string
+	disableToolDeferral                           bool
 	verbose, dryRun, allowRawCommandEvidence      bool
 	resume, selectModel, live                     bool
 
