@@ -1,7 +1,8 @@
 # Capability record: evidence-backed levels for what AXIS can be trusted to do
 
-Date: 2026-11-17. Status: implemented on `feat/capability-record`. This spec was written after the
-code, which is out of order under AGENTS.md §8; the PR says so and asks the maintainer to rule on it.
+Date: 2026-11-17. Status: implemented on `feat/capability-record`; spec review approve-with-changes,
+both findings fixed. This spec was written after the code, which is out of order under AGENTS.md §8;
+the PR says so and asks the maintainer to rule on it.
 
 ## Problem
 
@@ -45,8 +46,11 @@ and an origin the store sets:
 - Promotion is one level at a time, up to the ceiling, when all hold: the streak of counted passes
   reaches `promote_after` (default 20, floor 10); the pass rate over the last `window` outcomes is at
   least `min_rate` (default 0.98, floor 0.9); the streak covers at least `min_span` of time (default
-  6h, floor 1h); and no subject has an open failure. A failure from a checker opens its subject; only a
-  later checker pass on that same subject closes it. Any level change resets the streak.
+  6h, floor 1h); and no subject has an open failure. A failure from a checker opens its subject; a
+  later checker pass on that same subject closes it, or the operator closes it with `axis capability
+  resolve <capability> <subject> --reason ...` for a machine that was retired, renamed or will not be
+  checked again. A resolution is a journal entry with its reason; it never raises a level. Any level
+  change resets the streak.
 - The store stamps every entry's time, so a caller cannot backdate observations to fake the span.
 
 Storage, under `~/.axis/capability/`:
@@ -67,10 +71,13 @@ no NVIDIA GPU and no NVIDIA driver is loaded. Without `--node`, a check runs the
 machine against system calls; with `--node`/`--all-nodes` it compares the node's entry in the
 published snapshot with a read-only shell probe run over the AXIS SSH transport. A node AXIS reports
 unreachable, or that the probe cannot reach, is inconclusive. Subjects are `node:<snapshot name>`,
-lowercased.
+lowercased. A check without `--node` names this machine the same way, by the snapshot node whose
+recorded hostname is this machine's, and falls back to the OS hostname only when there is no snapshot
+or no such node.
 
-Commands: `axis capability list|show|check|record|ceiling|verify|export`. Level changes are emitted as
-`capability.promoted`, `capability.demoted` and `capability.ceiling.changed` events.
+Commands: `axis capability list|show|check|record|ceiling|resolve|verify|export`. Level changes are
+emitted as `capability.promoted`, `capability.demoted`, `capability.ceiling.changed` and
+`capability.failure.resolved` events.
 
 Tests: `internal/capability/*_test.go` (state machine edges, floors, span, open failures, journal
 chain, catch-up after an interrupted write, verify against edited, removed and truncated lines, torn
@@ -113,3 +120,21 @@ Measurement, from runs against a live cluster in throwaway `AXIS_HOME` directori
   in the journal; no optimization applies at hourly sweeps.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context session (Claude Code, new session on another machine)
+Model: Anthropic Claude
+Base: 4465fa4a81a14c19fbfbdca00feed2f976da0e0e
+Head: 8c1509f72af4599b1aa81e8480d7bb4b11b90cd2
+Date: 2026-11-17
+Verdict: approve-with-changes
+
+1. Major: a checker failure on a machine that is never checked again blocked promotion for good, with no operator path to clear it, since an inconclusive check never closes a failure and editing the journal breaks verify. Fixed in 74c41518: `axis capability resolve` journals an operator entry that closes one open subject with its reason and never raises a level; Design names it; TestResolveClosesOneOpenFailureForAMachineThatIsGone and TestCapabilityResolveCommand cover it.
+
+2. Minor: a check without `--node` named its subject after the OS hostname while `--node` checks use the snapshot name, so on a machine whose names differ the two never met. Fixed in 74c41518: local checks take the snapshot name of the node whose recorded hostname is this machine's and fall back to the hostname; TestALocalCheckUsesTheSnapshotNameOfThisMachine covers both paths.
+
+Questions:
+
+- Is writing this spec after the code acceptable under AGENTS.md section 8? Open: only the maintainer can rule on it; the PR asks.
+- Does any real node have an OS hostname that differs from its snapshot name? Verified: in the cluster this was built against, two of eleven nodes do (compared the names in `axis status` with each node's recorded hostname), so finding 2 was reachable.
+- Are capability events written when no daemon runs, and do they reach Cortex? Verified: `emitCapabilityTransition` enqueues to the event worker and `main` flushes it on exit, which writes the event log (TestCapabilityTransitionsReachTheEventLog); the root command registers the Cortex client when one is configured, and `capability.*` names are not on the telemetry block list in `internal/events`, so they are forwarded. Delivery to a live Cortex has not been observed yet, because no live promotion has happened.
