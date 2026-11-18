@@ -29,14 +29,21 @@ if [ "$os" = Linux ]; then
   df -Pk / | awk 'NR==2{print "disk_total_kb=" $2}'
   if [ -d /proc/driver/nvidia/gpus ]; then
     echo "nvidia_driver=present"
-    for f in /proc/driver/nvidia/gpus/*/information; do
-      [ -e "$f" ] || continue
-      if [ -r "$f" ]; then
-        awk -F: '/^Model:/{sub(/^[ \t]+/, "", $2); print "nvidia_gpu=" $2}' "$f"
-      else
-        echo "nvidia_unreadable=1"
-      fi
-    done
+    # Any GPU the driver lists but this user cannot read, or a list it cannot
+    # enumerate at all, makes the GPU count unknown.
+    if [ -r /proc/driver/nvidia/gpus ] && [ -x /proc/driver/nvidia/gpus ]; then
+      for d in /proc/driver/nvidia/gpus/*/; do
+        [ -d "$d" ] || continue
+        f="${d}information"
+        if [ -r "$f" ]; then
+          awk -F: '/^Model:/{sub(/^[ \t]+/, "", $2); if ($2 != "") { print "nvidia_gpu=" $2; n++ }} END{if (n == 0) print "nvidia_unreadable=1"}' "$f"
+        else
+          echo "nvidia_unreadable=1"
+        fi
+      done
+    else
+      echo "nvidia_unreadable=1"
+    fi
   else
     echo "nvidia_driver=absent"
   fi

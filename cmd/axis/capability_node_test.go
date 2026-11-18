@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -191,4 +194,75 @@ func TestProbeRunnerUsesALocalShellForThisMachine(t *testing.T) {
 	if ex, _ := probeRunnerFor(context.Background(), node); fmt.Sprintf("%T", ex) != "*transport.SSHExecutor" {
 		t.Fatalf("another machine must be dialed over SSH, got %T", ex)
 	}
+}
+
+// TestTheNodeProbeNeverPassesAGPUListItCannotRead runs the real probe script
+// against a stand-in for /proc/driver/nvidia/gpus.
+func TestTheNodeProbeNeverPassesAGPUListItCannotRead(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the probe reads the NVIDIA driver list only on Linux")
+	}
+	run := func(t *testing.T, gpuDir string, axis []models.GPUInfo) (nodeReading, capability.Observation) {
+		t.Helper()
+		script := strings.ReplaceAll(nodeProbeScript, "/proc/driver/nvidia/gpus", gpuDir)
+		out, err := exec.Command("sh", "-c", script).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := parseNodeProbe(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		obs := judgeGPU(capability.Observation{Capability: "facts.gpu", Checker: factsGPUChecker,
+			Evidence: capability.Evidence{Kind: capability.EvidenceLiveProbe, Ref: "test script"}}, axis, r)
+		return r, obs
+	}
+	gpuDir := func(t *testing.T, info string, write bool) string {
+		dir := filepath.Join(t.TempDir(), "gpus")
+		if err := os.MkdirAll(filepath.Join(dir, "0000:01:00.0"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if write {
+			if err := os.WriteFile(filepath.Join(dir, "0000:01:00.0", "information"), []byte(info), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	one := []models.GPUInfo{gpu("nvidia", "NVIDIA Example GPU A")}
+
+	t.Run("readable list passes", func(t *testing.T) {
+		if r, obs := run(t, gpuDir(t, "Model: NVIDIA Example GPU A\n", true), one); obs.Outcome != capability.OutcomePass || r.NVIDIAUnreadable {
+			t.Fatalf("got %s (%s), unreadable=%t", obs.Outcome, obs.Claim, r.NVIDIAUnreadable)
+		}
+	})
+	t.Run("a GPU without its information file", func(t *testing.T) {
+		if _, obs := run(t, gpuDir(t, "", false), nil); obs.Outcome != capability.OutcomeInconclusive {
+			t.Fatalf("got %s (%s); want inconclusive", obs.Outcome, obs.Claim)
+		}
+	})
+	t.Run("information without a model", func(t *testing.T) {
+		if _, obs := run(t, gpuDir(t, "IRQ: 42\n", true), nil); obs.Outcome != capability.OutcomeInconclusive {
+			t.Fatalf("got %s (%s); want inconclusive", obs.Outcome, obs.Claim)
+		}
+	})
+	t.Run("a list that cannot be enumerated", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a directory whatever its mode")
+		}
+		dir := gpuDir(t, "Model: NVIDIA Example GPU A\n", true)
+		if err := os.Chmod(dir, 0o100); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		// From the fresh-context diff review: before the fix this was a counted pass.
+		r, obs := run(t, dir, nil)
+		rec, _, _, err := capability.Open(t.TempDir()).RecordCheck(obs, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obs.Outcome != capability.OutcomeInconclusive || rec.Totals.Pass != 0 {
+			t.Fatalf("got %s driver=%s gpus=%d unreadable=%t passes=%d; want inconclusive", obs.Outcome, r.NVIDIADriver, len(r.NVIDIAGPUs), r.NVIDIAUnreadable, rec.Totals.Pass)
+		}
+	})
 }
