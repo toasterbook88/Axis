@@ -132,3 +132,38 @@ func TestDefaultRouterClassifierCases(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutingClassifierUnwrapsToolCall(t *testing.T) {
+	cases := []struct {
+		name  string
+		msgs  []chat.Message
+		cheap bool
+	}{
+		{"tool_call wrapping edit_file stays primary", []chat.Message{
+			{Role: chat.RoleUser, Content: "fix it"},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", toolCallName, `{"name":"edit_file","arguments":{"path":"a.go"}}`)}},
+			{Role: chat.RoleUser, Content: "ok"},
+		}, false},
+		{"tool_call wrapping mixed-case Edit_File stays primary", []chat.Message{
+			{Role: chat.RoleUser, Content: "fix it"},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", toolCallName, `{"name":" Edit_File ","arguments":{"path":"a.go"}}`)}},
+			{Role: chat.RoleUser, Content: "ok"},
+		}, false},
+		{"tool_call wrapping axis_run_task stays primary", []chat.Message{
+			{Role: chat.RoleUser, Content: "run it"},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", toolCallName, `{"name":"axis_run_task","arguments":{"description":"echo hi"}}`)}},
+			{Role: chat.RoleUser, Content: "ok"},
+		}, false},
+		{"tool_call wrapping read_file stays cheap", []chat.Message{
+			{Role: chat.RoleUser, Content: "check status"},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", toolCallName, `{"name":"read_file","arguments":{"path":"a.go"}}`)}},
+			{Role: chat.RoleUser, Content: "thanks"},
+		}, true},
+	}
+	for _, c := range cases {
+		got, _ := DefaultRouterClassifier(c.msgs)
+		if got != c.cheap {
+			t.Errorf("%s: got useCheap=%v, want %v", c.name, got, c.cheap)
+		}
+	}
+}

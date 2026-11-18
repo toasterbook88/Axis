@@ -20,6 +20,8 @@ type Config struct {
 	ContextWindow           int                  // Served context of the active model in tokens; 0 = unknown
 	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
 	Autonomy                AutonomyMode         // Autonomy mode: cluster, default, edit, or full (controls tool scope and auto-approval)
+	EagerTools              []string             // Optional allowlist of permitted tool names kept eager in Defs()
+	DisableToolDeferral     bool                 // Disable deferred tool loading; send all permitted non-bridge schemas eagerly
 	SystemExtra             string               // Extra text appended to system prompt
 	Verbose                 bool                 // Emit trace output for tool calls and turns
 	DryRun                  bool                 // Plan tool calls without executing them
