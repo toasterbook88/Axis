@@ -15,6 +15,14 @@ import (
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
+// forceNoColor turns color off and returns a func that restores the previous
+// setting. Under go test stdout is not a terminal, so color starts off;
+// restoring a fixed false would leave it on for every later test.
+func forceNoColor() func() {
+	prev := color.NoColor
+	color.NoColor = true
+	return func() { color.NoColor = prev }
+}
 func TestSummaryHelpNamesDashboardAndCacheDefault(t *testing.T) {
 	stdout, _, err := captureProcessOutput(t, func() error {
 		cmd := summaryCmd()
@@ -35,8 +43,7 @@ func TestSummaryHelpNamesDashboardAndCacheDefault(t *testing.T) {
 }
 
 func TestSummaryRenderEmptyState(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	view := populateSummaryView(&models.ClusterSnapshot{}, daemon.Metadata{})
 	got := normalizeGoldenOutput(view.Render())
@@ -44,8 +51,7 @@ func TestSummaryRenderEmptyState(t *testing.T) {
 }
 
 func TestSummaryRenderWithNodes(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := &models.ClusterSnapshot{
 		Summary: models.ClusterSummary{
@@ -92,8 +98,7 @@ func TestSummaryRenderWithNodes(t *testing.T) {
 }
 
 func TestSummaryRenderCorruptStateWarning(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := &models.ClusterSnapshot{
 		Warnings: []models.Warning{
@@ -110,8 +115,7 @@ func TestSummaryRenderCorruptStateWarning(t *testing.T) {
 }
 
 func TestSummaryCommandDaemonCache(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	meta := daemon.Metadata{Version: "v1.0.0", CacheAgeSec: 12, Ready: true, PublicationID: "pub-1"}
 	snap := models.ClusterSnapshot{
@@ -164,8 +168,7 @@ func TestSummaryCommandDaemonCache(t *testing.T) {
 }
 
 func TestSummaryCommandLiveSnapshot(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := &models.ClusterSnapshot{
 		Summary: models.ClusterSummary{
@@ -202,8 +205,7 @@ func TestSummaryCommandLiveSnapshot(t *testing.T) {
 }
 
 func TestSummaryRenderBarEdgeCases(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	tests := []struct {
 		name      string
@@ -232,8 +234,7 @@ func TestSummaryRenderBarEdgeCases(t *testing.T) {
 }
 
 func TestSummaryStaleCacheIndicator(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := &models.ClusterSnapshot{
 		Summary: models.ClusterSummary{TotalNodes: 1, ReachableNodes: 1},
@@ -252,8 +253,7 @@ func TestSummaryStaleCacheIndicator(t *testing.T) {
 }
 
 func TestSummaryRenderReachability(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := mixedReachabilitySnapshot()
 	view := populateSummaryView(snap, daemon.Metadata{CacheAgeSec: 90})
@@ -327,8 +327,7 @@ func TestSummaryRenderReachability(t *testing.T) {
 }
 
 func TestSummaryRenderReachabilityGolden(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	view := populateSummaryView(mixedReachabilitySnapshot(), daemon.Metadata{CacheAgeSec: 90})
 	got := normalizeGoldenOutput(view.Render())
@@ -337,8 +336,7 @@ func TestSummaryRenderReachabilityGolden(t *testing.T) {
 }
 
 func TestSummaryRenderReachabilityUnknownVantage(t *testing.T) {
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
+	defer forceNoColor()()
 
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
