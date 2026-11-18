@@ -57,6 +57,18 @@ func TestCortexGuidanceInjectedWhenCortexConnected(t *testing.T) {
 	if !strings.Contains(sys, "mcp_cortex_acquire_lock") || !strings.Contains(sys, "Cluster-shared memory (Cortex) is connected") {
 		t.Fatalf("Cortex memory guidance not injected into system prompt")
 	}
+	if !strings.Contains(sys, "tool_search") || !strings.Contains(sys, "tool_call") {
+		t.Fatalf("deferred Cortex tools should guide model via tool_search/tool_call")
+	}
+	var sawDeferredRecall bool
+	for _, entry := range a.ToolCatalog() {
+		if entry.Def.Function.Name == "mcp_cortex_recall" && entry.Deferred {
+			sawDeferredRecall = true
+		}
+	}
+	if !sawDeferredRecall {
+		t.Fatal("expected mcp_cortex_recall to remain in ToolCatalog as [deferred]")
+	}
 }
 
 func TestCortexGuidanceNotInjectedWhenCortexAbsent(t *testing.T) {

@@ -228,3 +228,11 @@ func TestMultiByteOutputOverCapIsCutAtDefault(t *testing.T) {
 	c.Append(Message{Role: RoleTool, ToolCallID: "t1", Content: original})
 	requireCapped(t, lastTool(t, c), original, 32768)
 }
+
+func TestToolResultCapMatchesConversation(t *testing.T) {
+	for _, tokens := range []int{0, -1, 1024, 4096, 8192, 32768} {
+		if got, want := ToolResultCap(tokens), toolResultCap(NewConversation(tokens).maxChars); got != want {
+			t.Fatalf("ToolResultCap(%d) = %d, want %d", tokens, got, want)
+		}
+	}
+}
