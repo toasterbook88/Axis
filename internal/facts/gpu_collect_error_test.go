@@ -9,16 +9,33 @@ const nvidiaSMIDriverFailure = "NVIDIA-SMI has failed because it couldn't commun
 	"Make sure that the latest NVIDIA driver is installed and running."
 
 func TestGPUCollectOutputDropsNvidiaSMIFailures(t *testing.T) {
-	for name, out := range map[string]string{
-		"driver unreachable, lspci fallback": nvidiaSMIDriverFailure + "\nIntel Corporation Example iGPU (rev 07)\n",
-		"driver unreachable, nothing else":   nvidiaSMIDriverFailure + "\n",
-		"no devices":                         "No devices were found\nIntel Corporation Example iGPU (rev 07)\n",
-		"NVML init failure":                  "Failed to initialize NVML: Driver/library version mismatch\nIntel Corporation Example iGPU (rev 07)\n",
-		"library missing":                    "NVIDIA-SMI couldn't find libnvidia-ml.so library in your system. Please make sure that the NVIDIA Display Driver is properly installed and present in your system.\n",
+	const igpu = "Intel Corporation Example iGPU (rev 07)"
+	for name, tc := range map[string]struct {
+		out  string
+		want []string // models that must come back, in order; nothing else may
+	}{
+		"driver unreachable, lspci fallback": {nvidiaSMIDriverFailure + "\n" + igpu + "\n", []string{igpu}},
+		"driver unreachable, nothing else":   {nvidiaSMIDriverFailure + "\n", nil},
+		"no devices":                         {"No devices were found\n" + igpu + "\n", []string{igpu}},
+		"NVML init failure":                  {"Failed to initialize NVML: Driver/library version mismatch\n" + igpu + "\n", []string{igpu}},
+		"library missing": {"NVIDIA-SMI couldn't find libnvidia-ml.so library in your system. Please make sure that the NVIDIA " +
+			"Display Driver is properly installed and present in your system.\n", nil},
 	} {
-		for _, g := range parseGPUCollectOutput(out) {
-			if g.Vendor == "nvidia" || g.Model != "Intel Corporation Example iGPU (rev 07)" {
+		gpus := parseGPUCollectOutput(tc.out)
+		var got []string
+		for _, g := range gpus {
+			if g.Vendor == "nvidia" {
 				t.Errorf("%s: an nvidia-smi failure became a GPU: %+v", name, g)
+			}
+			got = append(got, g.Model)
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got GPUs %q, want %q: the fallback GPU must survive the dropped failure", name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: got GPUs %q, want %q", name, got, tc.want)
 			}
 		}
 	}
