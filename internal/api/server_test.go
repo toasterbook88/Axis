@@ -21,6 +21,7 @@ import (
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -485,7 +486,17 @@ func TestV2MeshViewEcho(t *testing.T) {
 	}
 }
 
+// isolateLedgerHome points AXIS_HOME at a fresh directory. Ledger.Reserve
+// reloads and saves ledger.json there, so a shared home leaks reservations
+// between tests and runs, and a plain go test would write the developer's
+// real ~/.axis/ledger.json.
+func isolateLedgerHome(t *testing.T) {
+	t.Helper()
+	t.Setenv(persist.AxisHomeEnv, t.TempDir())
+}
+
 func TestV2ReservationsCRUD(t *testing.T) {
+	isolateLedgerHome(t)
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	ledger.SetNodeCapacity("node-a", 16384)
 	cache := &fakeCache{
@@ -591,6 +602,7 @@ func TestV2ReservationsCRUD(t *testing.T) {
 }
 
 func TestV2ReservationsCreateValidation(t *testing.T) {
+	isolateLedgerHome(t)
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	ledger.SetNodeCapacity("node-a", 16384)
 	cache := &fakeCache{
@@ -659,6 +671,7 @@ func TestV2ReservationsCreateValidation(t *testing.T) {
 }
 
 func TestV2ReservationsDetailNotFound(t *testing.T) {
+	isolateLedgerHome(t)
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	cache := &fakeCache{
 		meta:   daemon.Metadata{Ready: true},
@@ -691,6 +704,7 @@ func TestV2ReservationsDetailNotFound(t *testing.T) {
 }
 
 func TestV2ReservationsLedgerUnavailable(t *testing.T) {
+	isolateLedgerHome(t)
 	cache := &fakeCache{
 		meta:   daemon.Metadata{Ready: true},
 		ledger: nil,
@@ -728,6 +742,7 @@ func TestV2ReservationsLedgerUnavailable(t *testing.T) {
 }
 
 func TestV2ReservationsCreateAutoID(t *testing.T) {
+	isolateLedgerHome(t)
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	ledger.SetNodeCapacity("node-a", 16384)
 	cache := &fakeCache{
@@ -762,6 +777,7 @@ func TestV2ReservationsCreateAutoID(t *testing.T) {
 }
 
 func TestV2ReservationsCreateOversizedBody(t *testing.T) {
+	isolateLedgerHome(t)
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	ledger.SetNodeCapacity("node-a", 16384)
 	cache := &fakeCache{

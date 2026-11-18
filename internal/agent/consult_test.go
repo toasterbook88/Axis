@@ -102,6 +102,23 @@ func TestConsultDownSeatReturnsError(t *testing.T) {
 	})
 }
 
+// isolateConsultSlots gives the test its own consult slot map and restores the
+// shared one afterwards. A slot's token channel belongs to the synctest bubble
+// that made it, and a later test or a second -count run reaching the same seat
+// from another bubble is a fatal error.
+func isolateConsultSlots(t *testing.T) {
+	t.Helper()
+	consultSlotsMu.Lock()
+	saved := consultSlots
+	consultSlots = map[string]chan struct{}{}
+	consultSlotsMu.Unlock()
+	t.Cleanup(func() {
+		consultSlotsMu.Lock()
+		consultSlots = saved
+		consultSlotsMu.Unlock()
+	})
+}
+
 // slotSeat counts how many consults are inside ChatStream at once.
 type slotSeat struct {
 	mu  sync.Mutex
@@ -134,6 +151,7 @@ func (s *slotSeat) maxInFlight() int {
 }
 
 func TestConsultSingleSlotSerializesOneSeat(t *testing.T) {
+	isolateConsultSlots(t)
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		req := consultRequest{SeatID: "slot-a", Prompt: "judge this", SingleSlot: true}
@@ -167,6 +185,7 @@ func TestConsultEmptyVisibleTextIsAnError(t *testing.T) {
 }
 
 func TestConsultDifferentSingleSlotSeatsMayOverlap(t *testing.T) {
+	isolateConsultSlots(t)
 	synctest.Test(t, func(t *testing.T) {
 		seat := &slotSeat{entered: make(chan struct{}, 2), release: make(chan struct{})}
 		go consult(context.Background(), seat, consultRequest{SeatID: "seat-a", Prompt: "one", SingleSlot: true})
@@ -197,6 +216,7 @@ func TestConsultCancelledCallDoesNotReachTheSeat(t *testing.T) {
 }
 
 func TestQueuedConsultHonorsCancellation(t *testing.T) {
+	isolateConsultSlots(t)
 	// Hold the slot so a second consult must wait. A cancelled waiter has to
 	// return without taking the token or reaching the seat.
 	release, err := acquireConsultSlot(context.Background(), "seat-queued")

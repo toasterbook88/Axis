@@ -414,6 +414,7 @@ func TestCharOneShotLegacyContractUnchanged(t *testing.T) {
 	}
 	// The banner text the legacy branch prints must survive: a regression
 	// that drops or reroutes it changes scripted-output expectations.
+	defer forceNoColor()()
 	var buf bytes.Buffer
 	legacyOneShotBanner(&buf, "model", 25)
 	if !strings.Contains(buf.String(), "Agent [model] — max 25 turns") {
