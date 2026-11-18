@@ -22,10 +22,14 @@ const defaultSubAgentMaxTurns = 6
 
 // subAgentArgs is the argument shape for the spawn_subagent tool.
 type subAgentArgs struct {
-	Prompt     string `json:"prompt"`
-	TargetNode string `json:"target_node,omitempty"`
-	MaxTurns   int    `json:"max_turns,omitempty"`
-	Async      bool   `json:"async,omitempty"`
+	Prompt       string `json:"prompt"`
+	Objective    string `json:"objective"`
+	OutputFormat string `json:"output_format"`
+	Sources      string `json:"sources"`
+	Boundary     string `json:"boundary"`
+	TargetNode   string `json:"target_node,omitempty"`
+	MaxTurns     int    `json:"max_turns,omitempty"`
+	Async        bool   `json:"async,omitempty"`
 }
 
 // registerSubAgent registers the spawn_subagent tool definition. Execution is
@@ -34,21 +38,25 @@ type subAgentArgs struct {
 func (r *ToolRegistry) registerSubAgent() {
 	r.add("spawn_subagent",
 		"Delegate a focused sub-task to a child agent that runs its own tool-calling loop, "+
-			"scoped to a target cluster node. The sub-agent can investigate and run commands on that node "+
-			"(via run_on_node, remote_read_file, remote_grep, remote_list) and returns a final summary. "+
+			"scoped to a target cluster node. The caller must pass a brief: objective, output_format, "+
+			"sources, and boundary. A missing field is refused. The child does the task and returns its own "+
+			"final text; the parent must not invent that answer. "+
 			"Set async=true to run in the background and receive a task id immediately for check_task. "+
-			"Use this to parallelize work across nodes — e.g. one sub-agent runs tests on worker-1 while another "+
-			"validates a build on builder. The sub-agent inherits the active model and auto-approve setting. "+
+			"The sub-agent inherits the active model and auto-approve setting. "+
 			"Nesting is capped (sub-agents cannot spawn their own sub-agents beyond depth 2).",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
 				"prompt":{"type":"string","description":"The delegated sub-task instruction for the child agent"},
+				"objective":{"type":"string","description":"What the child must accomplish"},
+				"output_format":{"type":"string","description":"The shape of the child's final answer"},
+				"sources":{"type":"string","description":"Tools or sources the child may use"},
+				"boundary":{"type":"string","description":"What the child must not do"},
 				"target_node":{"type":"string","description":"Cluster node the sub-agent should focus on (optional; if omitted the sub-agent chooses via placement)"},
 				"max_turns":{"type":"integer","description":"Max tool-calling turns for the sub-agent (default 6)","default":6},
 				"async":{"type":"boolean","description":"Run subagent in background and return task id immediately (default false)","default":false}
 			},
-			"required":["prompt"]
+			"required":["prompt","objective","output_format","sources","boundary"]
 		}`),
 		// Placeholder executor — real dispatch happens in Agent.dispatchSubagent.
 		func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -77,6 +85,9 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 	if strings.TrimSpace(sa.Prompt) == "" {
 		return "", fmt.Errorf("spawn_subagent requires a non-empty \"prompt\" argument")
 	}
+	if err := subAgentBriefError(sa); err != nil {
+		return "", err
+	}
 	if a.subAgentDepth >= maxSubAgentDepth {
 		return "", fmt.Errorf("spawn_subagent recursion limit reached (depth %d >= %d); the sub-agent cannot spawn further children", a.subAgentDepth, maxSubAgentDepth)
 	}
@@ -89,8 +100,11 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 	sysExtra := fmt.Sprintf("You are a focused sub-agent (depth %d) delegated a single sub-task. "+
 		"Operate primarily on the cluster node %q using run_on_node / remote_read_file / remote_grep / remote_list. "+
 		"Investigate, run what's needed, then return a concise final answer to the parent agent. "+
-		"Do not spawn further sub-agents.",
-		a.subAgentDepth+1, firstNonEmpty(sa.TargetNode, "chosen by placement"))
+		"Do not spawn further sub-agents. "+
+		"Objective: %s. Output format: %s. Sources and tools: %s. Boundary: %s.",
+		a.subAgentDepth+1, firstNonEmpty(sa.TargetNode, "chosen by placement"),
+		strings.TrimSpace(sa.Objective), strings.TrimSpace(sa.OutputFormat),
+		strings.TrimSpace(sa.Sources), strings.TrimSpace(sa.Boundary))
 
 	child := a.buildChildAgent(maxTurns, sa.TargetNode, sysExtra)
 
@@ -154,6 +168,26 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 // final assistant text. Callers must not replace it with a synthesized answer.
 func subAgentNoAnswerError() error {
 	return fmt.Errorf("sub-agent returned no final answer; the parent must not invent one")
+}
+
+// subAgentBriefError refuses a delegation that does not say what the child
+// must do, how to answer, which sources it may use, and where it must stop.
+func subAgentBriefError(sa subAgentArgs) error {
+	var missing []string
+	for _, field := range []struct{ name, value string }{
+		{"objective", sa.Objective},
+		{"output_format", sa.OutputFormat},
+		{"sources", sa.Sources},
+		{"boundary", sa.Boundary},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			missing = append(missing, field.name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("spawn_subagent brief is incomplete (missing %s); the parent must not do the delegated work itself", strings.Join(missing, ", "))
 }
 
 // buildChildAgent constructs a scoped child Agent for spawn_subagent.
