@@ -129,9 +129,9 @@ Head: 8c1509f72af4599b1aa81e8480d7bb4b11b90cd2
 Date: 2026-11-17
 Verdict: approve-with-changes
 
-1. Major: a checker failure on a machine that is never checked again blocked promotion for good, with no operator path to clear it, since an inconclusive check never closes a failure and editing the journal breaks verify. Fixed in 74c41518: `axis capability resolve` journals an operator entry that closes one open subject with its reason and never raises a level; Design names it; TestResolveClosesOneOpenFailureForAMachineThatIsGone and TestCapabilityResolveCommand cover it.
+1. Major: a checker failure on a machine that is never checked again blocked promotion for good, with no operator path to clear it, since an inconclusive check never closes a failure and editing the journal breaks verify. Fixed in e55568cf: `axis capability resolve` journals an operator entry that closes one open subject with its reason and never raises a level; Design names it; TestResolveClosesOneOpenFailureForAMachineThatIsGone and TestCapabilityResolveCommand cover it.
 
-2. Minor: a check without `--node` named its subject after the OS hostname while `--node` checks use the snapshot name, so on a machine whose names differ the two never met. Fixed in 74c41518: local checks take the snapshot name of the node whose recorded hostname is this machine's and fall back to the hostname; TestALocalCheckUsesTheSnapshotNameOfThisMachine covers both paths.
+2. Minor: a check without `--node` named its subject after the OS hostname while `--node` checks use the snapshot name, so on a machine whose names differ the two never met. Fixed in e55568cf: local checks take the snapshot name of the node whose recorded hostname is this machine's and fall back to the hostname; TestALocalCheckUsesTheSnapshotNameOfThisMachine covers both paths.
 
 Questions:
 
