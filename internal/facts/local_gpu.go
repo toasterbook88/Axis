@@ -112,7 +112,7 @@ func localNvidiaSMIMemoryArgs() []string {
 }
 
 func linuxGPUCollectCommand() string {
-	return "nvidia-smi " + nvidiaSMIMemoryQuery + " --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'"
+	return "nvidia-smi " + nvidiaSMIMemoryQuery + " --format=csv,noheader,nounits 2>/dev/null | grep -E '^[0-9]+, ' || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'"
 }
 
 func darwinGPUCollectCommand() string {
@@ -155,26 +155,44 @@ func withoutNvidiaSMIFailures(out string) string {
 }
 
 // parseGPUCollectOutput reads the output of linuxGPUCollectCommand,
-// darwinGPUCollectCommand or the fact bundle's gpu field. nvidia-smi CSV has
-// commas, system_profiler has "Chipset Model", and lspci lines are one model
-// each. nvidia-smi failure lines are dropped first. It returns nil when the
-// output holds no GPU line.
+// darwinGPUCollectCommand or the fact bundle's gpu field. system_profiler
+// output has "Chipset Model". Otherwise each line is classified on its own: a
+// full nvidia-smi row (four columns, integer index) is an NVIDIA GPU, and any
+// other line is an lspci model name classified by its text, since a name can
+// hold ", " too ("Advanced Micro Devices, Inc."). nvidia-smi failure lines are
+// dropped first. When nvidia-smi rows are present, lspci's NVIDIA lines are
+// skipped as duplicates, as in localGPUsLinux. It returns nil when the output
+// holds no GPU line.
 func parseGPUCollectOutput(out string) []models.GPUInfo {
 	out = strings.TrimSpace(withoutNvidiaSMIFailures(out))
 	if out == "" {
 		return nil
 	}
-	if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
-		return parseNvidiaSMIOutput(out)
-	}
 	if strings.Contains(out, "Chipset Model") {
 		return parseSystemProfilerGPUs(out)
 	}
-	var gpus []models.GPUInfo
+	var rows, named []models.GPUInfo
 	for _, line := range strings.Split(out, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			gpus = append(gpus, models.GPUFromString(line))
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
+		parts := strings.Split(line, ", ")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		if gpu, ok := nvidiaSMIIndexedGPU(parts); ok {
+			rows = append(rows, gpu)
+			continue
+		}
+		named = append(named, models.GPUFromString(line))
+	}
+	gpus := rows
+	for _, g := range named {
+		if g.Vendor == "nvidia" && len(rows) > 0 {
+			continue
+		}
+		gpus = append(gpus, g)
 	}
 	return gpus
 }
