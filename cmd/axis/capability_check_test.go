@@ -32,6 +32,8 @@ func TestFactsHardwareCheckerVerdicts(t *testing.T) {
 		{"cores differ", sampleFacts(with(func(r *hardwareReading) { r.Cores = 4 })), nil, sampleHardware, nil, capability.OutcomeFail, "cores axis=4 probe=8", true},
 		{"disk differs", sampleFacts(with(func(r *hardwareReading) { r.DiskTotalGB = 400 })), nil, sampleHardware, nil, capability.OutcomeFail, "disk_total_gb axis=400 probe=900", true},
 		{"ram not observed", sampleFacts(with(func(r *hardwareReading) { r.RAMTotalMB = 0 })), nil, sampleHardware, nil, capability.OutcomeInconclusive, "did not observe ram_total_mb", true},
+		{"probe missed the disk", sampleFacts(sampleHardware), nil, with(func(r *hardwareReading) { r.DiskTotalGB = 0 }), nil, capability.OutcomeInconclusive, "probe did not measure disk_total_gb", true},
+		{"probe missed one, another differs", sampleFacts(with(func(r *hardwareReading) { r.Cores = 4 })), nil, with(func(r *hardwareReading) { r.DiskTotalGB = 0 }), nil, capability.OutcomeFail, "cores axis=4 probe=8", true},
 		{"probe failed", sampleFacts(sampleHardware), nil, hardwareReading{}, errors.New("no statfs"), capability.OutcomeInconclusive, "independent probe failed", false},
 		{"collector failed", nil, errors.New("timeout"), sampleHardware, nil, capability.OutcomeInconclusive, "collector failed: timeout", false},
 		{"collector gave no resources", &models.NodeFacts{Hostname: "alpha"}, nil, sampleHardware, nil, capability.OutcomeInconclusive, "no resources", false},

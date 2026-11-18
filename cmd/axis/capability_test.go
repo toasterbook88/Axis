@@ -264,6 +264,14 @@ func TestCapabilityStructuredOutput(t *testing.T) {
 	if out, err = runCapability(t, "verify", "--format", "json"); err != nil || !strings.Contains(out, "\"ok\": true") {
 		t.Fatalf("verify --format json = %q, %v", out, err)
 	}
+	if out, err = runCapability(t, "list", "--format", " JSON "); err != nil || !strings.HasPrefix(strings.TrimSpace(out), "{") {
+		t.Fatalf("list --format \" JSON \" = %q, %v; want JSON", out, err)
+	}
+	for _, args := range [][]string{{"list"}, {"show", "facts.hardware"}, {"export"}} {
+		if _, err := runCapability(t, append(args, "--format", "jsoon")...); err == nil || !strings.Contains(err.Error(), "invalid --format") {
+			t.Fatalf("%v --format jsoon = %v; want an invalid-format error", args, err)
+		}
+	}
 }
 
 func TestCapabilityResolveCommand(t *testing.T) {

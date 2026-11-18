@@ -535,3 +535,31 @@ func TestConcurrentWritersNeverLoseOrRepeatAnEntry(t *testing.T) {
 		t.Fatalf("Verify = %+v, %v", v, err)
 	}
 }
+
+func TestVerifyFindsAnEditedTransition(t *testing.T) {
+	s := newStore(t)
+	passes(t, s, 10)
+	lines := readLines(t, s.path(transitionsFile))
+	if len(lines) != 1 {
+		t.Fatalf("transitions = %v", lines)
+	}
+	var tr map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &tr); err != nil {
+		t.Fatal(err)
+	}
+	tr["reason"] = "edited by hand"
+	edited, _ := json.Marshal(tr)
+	if err := os.WriteFile(s.path(transitionsFile), append(edited, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Verify()
+	if err != nil || v.OK || !strings.Contains(strings.Join(v.Problems, " | "), "transition 1 differs") {
+		t.Fatalf("Verify must find an edited reason: %+v %v", v, err)
+	}
+	if _, err := s.RepairTransitions(); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Verify(); err != nil || !v.OK {
+		t.Fatalf("Verify after the repair = %+v, %v", v, err)
+	}
+}

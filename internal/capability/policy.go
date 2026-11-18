@@ -87,11 +87,12 @@ func DefaultPolicy(id string) Policy {
 }
 
 // Thresholds returns the policy's thresholds, raised to the floors. A span
-// that does not parse counts as the floor.
+// that does not parse counts as the floor; a span with seconds rounds up to
+// the next minute, so it never shortens the wait.
 func (p Policy) Thresholds() Thresholds {
 	span, _ := time.ParseDuration(p.MinSpan)
 	return Thresholds{PromoteAfter: p.PromoteAfter, Window: p.Window, MinRate: p.MinRate,
-		MinSpanMinutes: int(span / time.Minute)}.floored()
+		MinSpanMinutes: int((span + time.Minute - 1) / time.Minute)}.floored()
 }
 
 // Resolved fills unset thresholds with the defaults and refuses any below the floors.
@@ -108,8 +109,8 @@ func (p Policy) Resolved() (Policy, error) {
 	if p.MinSpan == "" {
 		p.MinSpan = DefaultMinSpan
 	}
-	if span, err := time.ParseDuration(p.MinSpan); err != nil || span < MinSpanFloor || span > MaxSpan {
-		return p, fmt.Errorf("capability %q: min_span is %q; it must be a duration between %s and %s", p.ID, p.MinSpan, MinSpanFloor, MaxSpan)
+	if span, err := time.ParseDuration(p.MinSpan); err != nil || span < MinSpanFloor || span > MaxSpan || span%time.Minute != 0 {
+		return p, fmt.Errorf("capability %q: min_span is %q; it must be a whole number of minutes between %s and %s", p.ID, p.MinSpan, MinSpanFloor, MaxSpan)
 	}
 	if p.PromoteAfter < MinPromoteAfter {
 		return p, fmt.Errorf("capability %q: promote_after is %d; the floor is %d", p.ID, p.PromoteAfter, MinPromoteAfter)

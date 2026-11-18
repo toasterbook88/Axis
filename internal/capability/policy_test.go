@@ -3,6 +3,7 @@ package capability
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,5 +81,17 @@ func TestForResolvesPoliciesBuiltInCode(t *testing.T) {
 	}
 	if got := (Policy{PromoteAfter: 1, Window: 1, MinRate: 0.01}).Thresholds(); got != (Thresholds{MinPromoteAfter, MinPromoteAfter, MinRateFloor, 60}) {
 		t.Fatalf("Thresholds must apply the floors, got %+v", got)
+	}
+}
+
+func TestMinSpanIsWholeMinutesAndNeverShortened(t *testing.T) {
+	if _, err := (Policy{ID: "facts.hardware", MinSpan: "1h59s"}).Resolved(); err == nil || !strings.Contains(err.Error(), "whole number of minutes") {
+		t.Fatalf("a span with seconds must be refused, got %v", err)
+	}
+	if got := (Policy{ID: "facts.hardware", MinSpan: "1h0m30s"}).Thresholds().MinSpanMinutes; got != 61 {
+		t.Fatalf("a span with seconds must round up to 61 minutes, got %d", got)
+	}
+	if _, err := (Policy{ID: "facts.hardware", MinSpan: "90m"}).Resolved(); err != nil {
+		t.Fatalf("90m is whole minutes: %v", err)
 	}
 }

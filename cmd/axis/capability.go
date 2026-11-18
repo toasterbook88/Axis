@@ -44,7 +44,22 @@ action.`,
 	cmd.PersistentFlags().String("format", "text", "Output format: text, json, or yaml")
 	cmd.AddCommand(capabilityListCmd(), capabilityShowCmd(), capabilityCheckCmd(), capabilityRecordCmd(),
 		capabilityCeilingCmd(), capabilityResolveCmd(), capabilityVerifyCmd(), capabilityExportCmd())
+	cmd.PreRunE = validateCapabilityFormat
+	for _, sub := range cmd.Commands() {
+		sub.PreRunE = validateCapabilityFormat
+	}
 	return cmd
+}
+
+// validateCapabilityFormat refuses a --format the capability commands do not
+// write, so a script's typo is an error rather than a table.
+func validateCapabilityFormat(cmd *cobra.Command, _ []string) error {
+	switch capabilityFormat(cmd) {
+	case "text", "json", "yaml":
+		return nil
+	}
+	raw, _ := cmd.Flags().GetString("format")
+	return fmt.Errorf("invalid --format %q (expected one of: text, json, yaml)", raw)
 }
 
 func capabilityFormat(cmd *cobra.Command) string {
@@ -52,6 +67,7 @@ func capabilityFormat(cmd *cobra.Command) string {
 	if format == "" {
 		format, _ = cmd.InheritedFlags().GetString("format")
 	}
+	format = strings.ToLower(strings.TrimSpace(format))
 	if format == "" {
 		format = "text"
 	}

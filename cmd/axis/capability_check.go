@@ -89,14 +89,21 @@ func judgeHardware(obs capability.Observation, axis, probe hardwareReading) capa
 	sum := sha256.Sum256(digest)
 	obs.Evidence.SHA256 = hex.EncodeToString(sum[:])
 
-	mismatched, unobserved := compareHardware(axis, probe)
+	mismatched, unobserved, unmeasured := compareHardware(axis, probe)
 	switch {
 	case len(mismatched) > 0:
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim("AXIS facts disagree with the probe: " + strings.Join(mismatched, "; "))
-	case len(unobserved) > 0:
+	case len(unobserved) > 0 || len(unmeasured) > 0:
 		obs.Outcome = capability.OutcomeInconclusive
-		obs.Claim = capabilityClaim("AXIS facts did not observe " + strings.Join(unobserved, ", "))
+		var parts []string
+		if len(unobserved) > 0 {
+			parts = append(parts, "AXIS facts did not observe "+strings.Join(unobserved, ", "))
+		}
+		if len(unmeasured) > 0 {
+			parts = append(parts, "the probe did not measure "+strings.Join(unmeasured, ", "))
+		}
+		obs.Claim = capabilityClaim(strings.Join(parts, "; "))
 	default:
 		obs.Outcome = capability.OutcomePass
 		obs.Claim = fmt.Sprintf("AXIS facts match the probe: os=%s arch=%s cores=%d ram_total_mb=%d disk_total_gb=%d",
@@ -108,11 +115,13 @@ func judgeHardware(obs capability.Observation, axis, probe hardwareReading) capa
 // compareHardware lists the fields where AXIS and the probe disagree, and the
 // fields AXIS did not observe. Totals may differ by rounding: RAM by 1% or
 // 64 MB, disk by 2% or 2 GB, whichever is larger.
-func compareHardware(axis, probe hardwareReading) (mismatched, unobserved []string) {
+func compareHardware(axis, probe hardwareReading) (mismatched, unobserved, unmeasured []string) {
 	text := func(name, a, p string) {
 		switch {
 		case a == "":
 			unobserved = append(unobserved, name)
+		case p == "":
+			unmeasured = append(unmeasured, name)
 		case a != p:
 			mismatched = append(mismatched, fmt.Sprintf("%s axis=%s probe=%s", name, a, p))
 		}
@@ -125,6 +134,8 @@ func compareHardware(axis, probe hardwareReading) (mismatched, unobserved []stri
 		switch {
 		case a <= 0:
 			unobserved = append(unobserved, name)
+		case p <= 0:
+			unmeasured = append(unmeasured, name)
 		case diff > tolerance:
 			mismatched = append(mismatched, fmt.Sprintf("%s axis=%d probe=%d", name, a, p))
 		}
@@ -134,7 +145,7 @@ func compareHardware(axis, probe hardwareReading) (mismatched, unobserved []stri
 	num("cores", int64(axis.Cores), int64(probe.Cores), 0)
 	num("ram_total_mb", axis.RAMTotalMB, probe.RAMTotalMB, max(64, probe.RAMTotalMB/100))
 	num("disk_total_gb", axis.DiskTotalGB, probe.DiskTotalGB, max(2, probe.DiskTotalGB/50))
-	return mismatched, unobserved
+	return mismatched, unobserved, unmeasured
 }
 
 func normalizeArch(arch string) string {

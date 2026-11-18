@@ -500,12 +500,14 @@ func (s *Store) checkTransitions(want []Transition) string {
 		}
 		got = append(got, t)
 	}
-	same := len(got) == len(want)
-	for i := 0; same && i < len(got); i++ {
-		a, b := got[i], want[i]
-		same = a.Seq == b.Seq && a.Kind == b.Kind && a.From == b.From && a.To == b.To && a.Capability == b.Capability
+	for i := 0; i < len(got) && i < len(want); i++ {
+		a, _ := json.Marshal(got[i])
+		b, _ := json.Marshal(want[i])
+		if !bytes.Equal(a, b) {
+			return fmt.Sprintf("%s does not match the journal: its transition %d differs from the replay's; rebuild it with axis capability verify --repair-transitions", transitionsFile, i+1)
+		}
 	}
-	if same {
+	if len(got) == len(want) {
 		return ""
 	}
 	return fmt.Sprintf("%s does not match the journal (%d transitions there, %d in the replay); rebuild it with axis capability verify --repair-transitions", transitionsFile, len(got), len(want))

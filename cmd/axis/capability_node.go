@@ -24,7 +24,7 @@ import (
 // --node checks. It prints key=value lines and changes nothing.
 const nodeProbeScript = `os=$(uname -s); echo "os=$os"; echo "arch=$(uname -m)"
 if [ "$os" = Linux ]; then
-  echo "cores=$(getconf _NPROCESSORS_ONLN)"
+  echo "cores=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)"
   awk '/^MemTotal:/{print "ram_total_kb=" $2}' /proc/meminfo
   df -Pk / | awk 'NR==2{print "disk_total_kb=" $2}'
   if [ -d /proc/driver/nvidia/gpus ]; then
@@ -344,11 +344,38 @@ func judgeGPU(obs capability.Observation, gpus []models.GPUInfo, r nodeReading) 
 	case len(nvidia) != len(r.NVIDIAGPUs):
 		obs.Outcome = capability.OutcomeFail
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists %d NVIDIA GPU(s), the driver shows %d (%s)", len(nvidia), len(r.NVIDIAGPUs), strings.Join(r.NVIDIAGPUs, ", ")))
+	case !sameGPUModels(nvidia, r.NVIDIAGPUs):
+		obs.Outcome = capability.OutcomeFail
+		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists NVIDIA GPU(s) %s, the driver shows %s", strings.Join(nvidia, ", "), strings.Join(r.NVIDIAGPUs, ", ")))
 	default:
 		obs.Outcome = capability.OutcomePass
 		obs.Claim = capabilityClaim(fmt.Sprintf("AXIS lists the %d NVIDIA GPU(s) the driver shows: %s", len(nvidia), strings.Join(nvidia, ", ")))
 	}
 	return obs
+}
+
+// sameGPUModels reports whether two lists name the same GPU models, ignoring
+// order, case and runs of spaces. The driver and nvidia-smi spell a model the
+// same way, so any other difference is a different GPU.
+func sameGPUModels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	norm := func(in []string) []string {
+		out := make([]string, len(in))
+		for i, s := range in {
+			out[i] = strings.ToLower(strings.Join(strings.Fields(s), " "))
+		}
+		sort.Strings(out)
+		return out
+	}
+	x, y := norm(a), norm(b)
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }
 
 var gpuErrorWords = []string{"failed", "error", "couldn't", "could not", "unable", "not found", "no devices", "make sure"}
