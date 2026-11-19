@@ -23,7 +23,7 @@ Install to `~/.local/bin` (no `sudo`), then check the binary. macOS and Linux on
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.25.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.26.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -106,10 +106,11 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 ## Install
 
 > [!IMPORTANT]
-For v0.25.0's `consult_model`, cloud stream idle guard, and fail-closed desk
-leases, see the
-[v0.25.0 upgrade guide](docs/release-notes.md#v0250-upgrade-guide).
+For v0.26.0's deferred MCP tool schemas, delegation brief, occupied-GPU
+refusal, and `axis capability`, see the
+[v0.26.0 upgrade guide](docs/release-notes.md#v0260-upgrade-guide).
 Upgrading from an older release? See the
+[v0.25.0](docs/release-notes.md#v0250-upgrade-guide),
 [v0.24.0](docs/release-notes.md#v0240-upgrade-guide),
 [v0.23.0](docs/release-notes.md#v0230-upgrade-guide),
 [v0.22.0](docs/release-notes.md#v0220-upgrade-guide),
@@ -126,7 +127,7 @@ The [Quick start](#quick-start) command is the recommended workstation install. 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.25.0 AXIS_REQUIRE_PINNED=1 bash
+  | AXIS_VERSION=v0.26.0 AXIS_REQUIRE_PINNED=1 bash
 ```
 
 A system install may remove verified user-local AXIS copies so only one `axis` is on `PATH`. Set `AXIS_KEEP_LEGACY=1` to keep them.
@@ -174,7 +175,7 @@ Preview an install without writing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.25.0 bash
+  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.26.0 bash
 ```
 
 </details>
@@ -343,8 +344,8 @@ For a system-wide install, remove `/usr/local/bin/axis` with `sudo` instead.
 
 | Item | Value |
 | --- | --- |
-| Latest release | [**v0.25.0**](https://github.com/toasterbook88/axis/releases/tag/v0.25.0) (tag commit `8578cb2a`) |
-| Supported security line | `v0.25.x` (see [`SECURITY.md`](SECURITY.md)) |
+| Latest release | [**v0.26.0**](https://github.com/toasterbook88/axis/releases/tag/v0.26.0) (tag commit `d62e1230`) |
+| Supported security line | `v0.26.x` (see [`SECURITY.md`](SECURITY.md)) |
 | Release builds | darwin and linux × amd64 and arm64 (reproducible GoReleaser builds) |
 
 ## Build and test
