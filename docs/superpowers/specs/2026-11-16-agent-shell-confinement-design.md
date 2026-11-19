@@ -1,22 +1,21 @@
 # Confine auto-approved `run_shell` under `--autonomy full`
 
-Date: 2026-11-16; proposed revision: 2026-11-18.
-Status: **PROPOSED revision 2 — operator contract choice and fresh spec review pending.**
+Date: 2026-11-16; revision 2: 2026-11-19.
+Status: revision 2 — strict combined contract adopted by operator (2026-11-19); awaiting fresh §8 spec review before implementation.
 
-## Decision history and pending operator choice
+## Decision history
 
 The recorded 2026-11-16 choice was an in-process Landlock re-exec helper, with bubblewrap
 (`bwrap`) added when installed; full-mode shell would fail closed on an insufficient host, allow
 writes beneath cwd and a private temp directory, and leave network access open. That choice is
-preserved here and in the parent revision; it is not approval of the stronger proposal below.
+preserved here in the decision record.
 
-The completed review of revision 1 returned **revise**. Its findings require a different contract
-to retain the promised filesystem modification boundary. **Recommendation, pending operator
-choice:** require BOTH Landlock ABI >= 9 and a usable read-only bwrap layer for every confined
-full-mode shell, with no automatic unconfined or single-mechanism fallback. This deliberately
-reduces availability. The operator must either adopt this combined contract or request a separate,
-explicitly weaker contract for review. This draft does not select on the operator's behalf.
-No implementation is authorized by this document, and no approval is recorded for revision 2.
+The completed review of revision 1 returned **revise**. Its findings required a stronger contract
+to retain the promised filesystem modification and UNIX-socket boundaries. On **2026-11-19**, the
+operator adopted the **strict combined contract** for revision 2: require BOTH Landlock ABI >= 9
+and a usable read-only `bwrap` layer for every confined full-mode `run_shell`, failing closed with
+no automatic single-layer or unconfined fallback, even though this deliberately reduces
+availability. No implementation starts until a fresh-context §8 spec review approves revision 2.
 
 ## Problem
 
@@ -33,7 +32,7 @@ runner normally tries daemon HTTP first; caller context values are not serialize
 Nothing between the safety scorer and the kernel limits what an auto-approved command can touch.
 The scorer is pattern-based; a command it misjudges can modify unrelated user files and reach
 privileged local UNIX sockets where the user has access. These are generic threats, not assertions
-about any maintainer host. At revision-1 head `a987874b`, the local shell spawn sites above contain
+about any maintainer host. At base `b55931b8`, the local shell spawn sites above contain
 no per-command filesystem, socket or signal confinement.
 
 ## Non-goals
@@ -145,7 +144,7 @@ no per-command filesystem, socket or signal confinement.
      proposed. Calls without a required policy retain existing daemon-first behavior.
 
 4. **Agent attaches the policy only for auto-approvable shell.** In `Agent.dispatchShell`
-   (`internal/agent/dispatch.go:280`), when the active scope is `ScopeExec` and confinement mode is
+   (`internal/agent/dispatch.go:338-339`), when the active scope is `ScopeExec` and confinement mode is
    `auto`, the agent creates a per-call private temp dir (`os.MkdirTemp`, removed after the call),
    sets `TMPDIR` for the command, and wraps `ctx` with `Policy{Writable: [process cwd], TempDir,
    Mode: required}` before calling the shell runner.
@@ -304,6 +303,7 @@ Questions:
   regressions do not exist yet; fresh review must assess the proposed mechanism.
 
 Note: This is the supplied completed revision-1 review, not approval of revision 2. Its isolated
-  probes support its findings, not acceptance of the new combined policy. Operator contract choice
-  and a new fresh-context review against the committed revision-2 SHA remain pending. The drafter
-  did not rerun or invent review probes. Private host inventory and artifact locations are omitted.
+  probes support its findings, not acceptance of the new combined policy. The operator adopted the
+  strict combined contract on 2026-11-19; a new fresh-context review against the committed
+  revision-2 SHA remains pending. The drafter did not rerun or invent review probes. Private host
+  inventory and artifact locations are omitted.
