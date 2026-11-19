@@ -141,3 +141,27 @@ Tests (`internal/llmrouter/upstream_test.go`), each with a local `httptest` hub 
   change parses a body the check already reads, bounded by the existing `maxProbeResponseBytes`.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (same family as the author, so a fresh top-tier session rather than a cross-family review)
+Base: de6b81f2996449bbb93d3c793098ad1438aa5315
+Head: 02b9729957a024711199d128222f10fdd8584b85
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Minor: `/model/info` entries were still picked with the tag-insensitive `ModelListed`, so a healthy sibling alias (`coder:7b`) could pass a hub whose `coder` alias cannot serve, while LiteLLM routes on the exact name. Fixed in 09af5b92: Design step 1 picks exact `model_name` entries first and falls back to `ModelListed` only when none exists; the test list adds the `coder` / `coder:7b` case.
+
+2. Minor: keying checks by (`api_base`, forwarded model) would have added model-list requests to one server, contradicting "no request is added". Fixed in 09af5b92: Design step 2 fetches each distinct `api_base` once and checks every forwarded model against that body; the non-goal and Research say so; the test list asserts one fetch for two deployments on one `api_base`.
+
+3. Minor: the spec did not say whether `--allow-unlisted` relaxes the new verdict. Fixed in 09af5b92: Design step 5 keeps the strict skip and, with `allow_unlisted`, leaves such a hub selectable at confidence 0.55 with a "still selecting" note, as for a lazy-load hub; the flag help and §2.6 are to say so; the test list covers both modes; Alternatives records the hard-verdict option and why it was not taken.
+
+4. Minor: a deployment that names its provider in `custom_llm_provider` with an unprefixed model got no verdict, though its forwarded name is derivable. Fixed in 09af5b92: Design step 1 forwards the whole model for one of the six providers given that way; the non-goal is narrowed; the provider table test covers both forms.
+
+5. Minor: the listed tests would still pass with a broken prefix table, a dedup that checks only the first model per server, or an unparseable body treated as an empty list. Fixed in 09af5b92: the test list adds a table over all six providers plus an unknown one, two deployments on one `api_base` with the unlisted one first, and an unparseable body that must give "answered".
+
+Questions:
+
+- Do other servers reached through these providers answer names they do not list? Open: llamafile, `mlx_lm.server` and proxies such as llama-swap were not probed, since none runs where this was written; `--allow-unlisted` keeps such a route selectable if one does. For TGI the source settled it: `router/src/server.rs` lists one entry with `owned_by` equal to its model ID and serves the name `tgi`, so Design step 3 exempts both signs and the test list covers them.
+- With one hub skipped as unlisted and another as dead, which strict-mode suffix applies? Verified: Design step 5 now defines all three suffixes, and the test list includes a dead hub plus an unlisted hub.
+- How was "all seven pass" produced, and why seven when eight aliases remain? Verified: the lists were read by hand against the rules, which Research now says, with the implementation to be run against the same hub before merge; the eighth alias is stored in the hub's database, not its config file, and was not measured.
