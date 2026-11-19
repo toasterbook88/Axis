@@ -239,7 +239,9 @@ This is advisory only — no completion request is sent.
 
 By default (when probing), backends that advertise a non-empty model list without
 the requested model are skipped. Exit code 7 means the model was not listed on
-any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
+any healthy backend, or that a hub lists it but the server behind it answered with a
+list that does not name it. Use --allow-unlisted to restore lazy-load acceptance; it
+also keeps such a hub selectable at lower confidence.
 
   axis ai route default
   axis ai route --model fast-chat
@@ -320,7 +322,7 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
 	cmd.Flags().StringVar(&aiPath, "ai-config", "", "Path to ai.yaml (default: ~/.axis/ai.yaml)")
 	cmd.Flags().StringVar(&model, "model", "", "Override role model, or resolve model without a role")
 	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "Config-only preference order (no health checks)")
-	cmd.Flags().BoolVar(&allowUnlisted, "allow-unlisted", false, "Accept healthy backends even when the model is absent from a non-empty list")
+	cmd.Flags().BoolVar(&allowUnlisted, "allow-unlisted", false, "Accept healthy backends even when the model is absent from a non-empty list, or from the list of the server behind a hub")
 	cmd.Flags().DurationVar(&timeout, "timeout", 8*time.Second, "Probe budget")
 	return cmd
 }

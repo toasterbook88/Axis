@@ -47,8 +47,12 @@ inference_probe=skipped
 These do **not** override the selected node. They tell operators which backend
 to call after placement. Use `axis ai route` when you want a live probe. For a
 LiteLLM hub on the same machine, the route also checks the server behind the
-listed model and skips the hub when that server does not answer
-(`docs/decisions/inference-route-strict-and-mcp.md`, item 5).
+listed model and skips the hub when that server does not answer, or answers with
+a list that does not name the model the hub forwards to it
+(`docs/decisions/inference-route-strict-and-mcp.md`, items 5 and 6).
+`--allow-unlisted` keeps a hub whose server only fails the name check, at
+confidence 0.55. `axis agent --model` has no such flag; for a server that serves
+a name it does not list, add a role that names the model.
 
 ## Operator pattern (private grids)
 

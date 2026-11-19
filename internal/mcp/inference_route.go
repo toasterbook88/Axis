@@ -41,7 +41,7 @@ func registerInferenceRouteTool(s *mcpserver.MCPServer) {
 			),
 			mcpproto.WithBoolean(
 				"allow_unlisted",
-				mcpproto.Description("If true, accept healthy backends even when the model is absent from a non-empty list (default false)"),
+				mcpproto.Description("If true, accept healthy backends even when the model is absent from a non-empty list, or from the list of the server behind a hub (default false)"),
 			),
 			mcpproto.WithBoolean(
 				"require_model_listed",

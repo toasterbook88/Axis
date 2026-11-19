@@ -160,7 +160,8 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 
 	var fallbacks []string
 	var upstreams []UpstreamCheck
-	upstreamDead := false
+	// Why hubs that list the model were skipped, for the strict-mode error.
+	upstreamDead, upstreamUnserved := false, false
 	for i, name := range prefer {
 		b, ok := cfg.FindBackend(name)
 		if !ok {
@@ -198,6 +199,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 		}
 
 		modelPresent := ModelListed(p.Models, model)
+		var unlisted *UpstreamCheck
 		if modelPresent {
 			checks, checked, note := checkModelUpstreams(ctx, b, opts.HTTPClient, opts.NodeConfig, model)
 			upstreams = append(upstreams, checks...)
@@ -205,14 +207,31 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 				reasoning = append(reasoning, fmt.Sprintf("backend %q: %s", name, note))
 			}
 			if checked && !anyUpstreamOK(checks) {
-				reasoning = append(reasoning, fmt.Sprintf("skip %q: model %q listed, but no upstream answers (%s: %s)",
-					name, model, checks[0].APIBase, checks[0].Message))
-				upstreamDead = true
-				continue
+				u, ok := firstUnlisted(checks)
+				switch {
+				case !ok:
+					reasoning = append(reasoning, fmt.Sprintf("skip %q: model %q listed, but no upstream answers (%s: %s)",
+						name, model, checks[0].APIBase, checks[0].Message))
+					upstreamDead = true
+					continue
+				case opts.RequireModelListed:
+					reasoning = append(reasoning, fmt.Sprintf("skip %q: model %q listed, but no upstream serves it (%s: %s)",
+						name, model, u.APIBase, u.Message))
+					upstreamUnserved = true
+					continue
+				default:
+					// allow_unlisted: an upstream can serve a name it does not
+					// list, so the hub stays selectable, as a lazy-load hub does.
+					unlisted = &u
+				}
 			}
 		}
 		conf := 0.75
-		if modelPresent {
+		if unlisted != nil {
+			conf = 0.55
+			reasoning = append(reasoning, fmt.Sprintf("backend %q healthy; model %q listed, but its upstream does not list %q — still selecting (allow_unlisted)",
+				name, model, unlisted.Model))
+		} else if modelPresent {
 			conf = 0.95
 			reasoning = append(reasoning, fmt.Sprintf("backend %q healthy; model %q listed", name, model))
 		} else if len(p.Models) == 0 {
@@ -261,10 +280,10 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 				Role:      roleName,
 				Model:     model,
 				Probed:    true,
-				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q%s", model, upstreamSuffix(upstreamDead))),
+				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q%s", model, upstreamSuffix(upstreamDead, upstreamUnserved))),
 				Probes:    probes,
 				Upstreams: upstreams,
-			}, fmt.Errorf("%w: %q%s", ErrModelUnlisted, model, upstreamSuffix(upstreamDead))
+			}, fmt.Errorf("%w: %q%s", ErrModelUnlisted, model, upstreamSuffix(upstreamDead, upstreamUnserved))
 		}
 	}
 
@@ -324,10 +343,16 @@ func remainingNames(prefer []string, selected string) []string {
 	return out
 }
 
-// upstreamSuffix explains a strict-mode failure caused by a dead upstream.
-func upstreamSuffix(dead bool) string {
-	if dead {
+// upstreamSuffix explains a strict-mode failure caused by hubs whose upstreams
+// did not answer (dead) or answered without the model (unserved).
+func upstreamSuffix(dead, unserved bool) string {
+	switch {
+	case dead && unserved:
+		return " (listed, but no upstream answers or serves it)"
+	case dead:
 		return " (listed, but no upstream answers)"
+	case unserved:
+		return " (listed, but no upstream serves it)"
 	}
 	return ""
 }
