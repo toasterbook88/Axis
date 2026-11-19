@@ -1,3 +1,36 @@
+## v0.27.0 (2026-11-19)
+
+`axis agent --model` can use a model that a configured backend serves but no
+role names, and `axis ai route` no longer calls a hub healthy when the server
+behind the model is up but does not have it.
+
+### Features
+
+* `axis agent --model` and `axis tui --model` use a configured `ai.yaml`
+  backend for an explicitly named model that no enabled local catalog entry
+  has and this machine's Ollama does not have. The first backend, in file
+  order, whose fresh probe lists exactly that model is used, shaped like a role
+  entry (credential binding, security class, node). A copy on local Ollama
+  still wins, `--role` stays pinned to its preferences, and implicit, cloud and
+  interactive selection are unchanged. `axis agent --model` previously refused
+  such a model that `axis ai route --model` resolved (#666).
+* `axis ai route` and MCP `inference_route_explain` read the model list of each
+  server behind a LiteLLM-style hub and compare it with the name the hub
+  forwards (`litellm_params.model` without its provider prefix, or by
+  `custom_llm_provider`). A non-empty list without that name means the server
+  does not serve it: strict mode skips the hub ("listed, but no upstream
+  serves it"), and `--allow-unlisted` keeps it selectable at confidence 0.55.
+  Lists that cannot say give no verdict: empty or unparseable bodies, 401/403,
+  llama-server and TGI. Checks report `model` and `unlisted` (#668).
+
+### Documentation
+
+* README, `SECURITY.md` and the release notes name v0.26.0, with a v0.26.0
+  upgrade guide (#665).
+* Design specs for confining auto-approved `run_shell` under
+  `--autonomy full` (#660) and for a rendered fleet config with drift checks
+  (#667); neither is implemented in this release.
+
 ## v0.26.0 (2026-11-18)
 
 `axis capability` records how often AXIS's own facts prove true; `axis agent`
