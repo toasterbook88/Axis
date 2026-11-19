@@ -8,6 +8,81 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.26.0 upgrade guide
+
+[v0.26.0](https://github.com/toasterbook88/axis/releases/tag/v0.26.0) was published
+from commit `d62e1230`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
+v0.25.0 are listed in the [changelog](../CHANGELOG.md#v0260-2026-11-18).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### `axis agent` defers external MCP tool schemas
+
+`axis agent` no longer sends every permitted external MCP tool schema on every
+round. The system prompt lists those tools in a catalog bounded to 2400 bytes,
+and the model reaches them through two bridge tools: `tool_search` returns a
+tool's schema and `tool_call` invokes it. A bridged call passes the same scope,
+safety and confirmation checks as a direct one. Built-in tools stay eager.
+`--eager-tools` names the permitted tools to keep eager, built-in or external,
+and defers every other permitted tool; `--no-defer-tools` restores sending
+every permitted schema on every round. Cluster scope has no bridge tools.
+
+### `spawn_subagent` needs a delegation brief
+
+A call to `spawn_subagent` must carry `objective`, `output_format`, `sources`
+and `boundary` alongside `prompt`. A call with any of them missing or blank is
+refused before a child starts, with an error naming the missing fields. The
+four fields are carried into the child's system prompt. A prompt or script that
+told a model to spawn with only `prompt` now needs the brief.
+
+### `axis model start` refuses while a GPU holds a resident model
+
+`axis model start` refuses a llama-server launch when the snapshot shows a
+resident model on any GPU of the target machine; the operation receipt
+records the disposition `gpu_occupied`. `--main-gpu` chooses where the main layers go but does not
+isolate a device, so a different `--main-gpu` no longer gets past the check.
+A resident model with no observed GPU index does not count as occupancy, and
+CPU models on distinct ports are still allowed. Stop the resident model first,
+or use `axis model evict`.
+
+### GPU facts never list an `nvidia-smi` failure message
+
+On a machine where `nvidia-smi` is installed but the NVIDIA driver is not
+loaded, the failure message (which names NVIDIA) no longer becomes a CUDA GPU
+in the snapshot. Remote collection and the fact bundle take only `nvidia-smi`
+data rows and fall back to `lspci` only when none were printed. Remote GPUs are
+read over SSH by the machine that collects them, so updating the daemon's host
+corrects every machine it collects.
+
+### `axis doctor` HTTP MCP probes connect directly
+
+HTTP MCP probes resolve and validate the exact addresses they dial within the
+endpoint's time budget, and ignore environment proxies, so neither a proxy nor
+a second DNS answer can send a probe somewhere unchecked. An endpoint that is
+reachable only through a proxy now shows an advisory probe failure. The probes
+establish that a listener answers, not that it speaks MCP.
+
+### New: `axis capability`
+
+`axis capability` keeps a record of how often AXIS's own facts prove true. It
+lives under `~/.axis/capability/`: `journal.jsonl` is the hash-chained record,
+and `state.json` and `transitions.jsonl` are derived from it. `axis capability
+check facts.hardware` and `check facts.gpu` compare the published facts with an
+independent probe on this machine, on named machines with `--node`, or on every
+machine in the snapshot with `--all-nodes`; another machine is probed over
+AXIS's SSH. Promotion thresholds can be set per capability in
+`~/.axis/capabilities.yaml`, and `axis capability ceiling` sets the highest
+level a capability may reach (advisory by default). Nothing writes the record until a capability command runs, and no AXIS surface
+reads a level to allow or refuse an action.
+
+### Also in this release
+
+- Cancelling a cloud consult no longer waits on runtime credential resolution.
+- For source builds: the API reservation tests no longer write the developer's
+  real `~/.axis/ledger.json`, and the test suite passes when run twice in one
+  process.
+
 ## v0.25.0 upgrade guide
 
 [v0.25.0](https://github.com/toasterbook88/axis/releases/tag/v0.25.0) was published
