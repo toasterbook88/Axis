@@ -1,8 +1,8 @@
 # `axis config`: rendered fleet config with drift checks
 
 Date: 2026-11-17; revised: 2026-11-19
-Status: draft v4 (addressing third §8 spec review findings; awaiting fresh re-review; no code until approved)
-Owning area: `cmd/axis`, `internal/config`, `internal/discovery`, `internal/llmrouter`
+Status: draft v5 (addressing fourth §8 spec review findings; awaiting fresh re-review; no code until approved)
+Owning area: `cmd/axis`, `internal/config`, `internal/facts`, `internal/discovery`, `internal/llmrouter`
 
 ## Problem
 
@@ -30,8 +30,9 @@ writing spec that one deferred, scoped to generated files rather than hand-edite
 - No runtime resolver in phase 1. Phase 1 renders files the current loader already understands;
   phase 2 lets the daemon resolve membership and models at runtime.
 - No config writes from `axis agent`, MCP, HTTP or execution surfaces.
-- No change to the fact plane, snapshot contract or daemon wire protocol in phase 1, and no
-  change to `internal/discovery` beyond read-only inspection.
+- No change to fact schemas, collector output, snapshot contract, or daemon wire protocol in
+  phase 1 (only exporting a narrow `RemoteNodeIdentity` helper in `internal/facts` wrapping existing
+  `detectRemoteNodeIdentity`), and no change to `internal/discovery` beyond read-only inspection.
 - No new secret indirection in phase 1. The loader does not require `discovery.secret`
   (`internal/config/config.go:581-588` only validates ports/intervals), but beacon authentication
   requires a non-empty value (`internal/discovery/udp.go:56-59,76-82`). Phase 1 therefore requires
@@ -57,8 +58,9 @@ intent, and make the existing config files generated:
 ~/.axis/ai.yaml             generated (0600): hub + healthy local backends + roles, with # model_sha256: <hex>
 ```
 
-`bootstrap.yaml` is deliberately tiny (`hub_url` is required when `local.yaml` defines `ai.roles`
-referencing `hub` or when `--scope ai` is used, and optional when operating `nodes.yaml`-only):
+`bootstrap.yaml` is deliberately tiny (`hub_url` is required only when `local.yaml` defines
+`ai.roles` referencing `hub`, and optional when operating `nodes.yaml`-only or hubless local-only
+AI roles):
 
 ```yaml
 hub_url: https://models.example.com/v1
@@ -148,20 +150,27 @@ backups are 0600.
 
 `allow_stable_ids` is the membership authority:
 
-- An allowlisted node in `~/.axis/roster.yaml` (or `--roster PATH`) stays in the roster even when
-  it is offline. The roster supplies its `name`, `stable_id`, and optional pinned `hostname` /
-  `endpoints`; for unpinned entries, live discovery supplies addresses and observed facts. Precedence
-  for `hostname`/`endpoints` is therefore: non-empty roster pin, then authenticated live discovery;
-  if neither provides `hostname` or `endpoints[].hostname`, `Config.Validate` rejects the entry
-  (`internal/config/config.go:552-554`).
-- An allowlisted peer joins/updates addresses from either:
-  1. An HMAC-authenticated UDP discovery beacon (`internal/discovery/udp.go:56-82`) whose `StableID`
-     is in `allow_stable_ids`, or
-  2. A pinned `roster.yaml` / `--roster` entry (including off-subnet or cross-site peers), which
-     `axis config discover` can optionally corroborate via `axis`'s existing `known_hosts`-verified
-     SSH transport (`internal/transport/ssh.go`) and remote stable-ID probe (`detectRemoteNodeIdentity`,
-     `internal/facts/identity.go:59-76`). No new SSH signing protocol or change to `internal/discovery`
-     is added.
+- Every rendered node in `nodes.yaml` must be pre-declared in `~/.axis/roster.yaml` (or `--roster PATH`),
+  which owns `name` and `stable_id`, plus optional pinned `hostname` / `endpoints`. For unpinned
+  entries already declared in `roster.yaml`, live discovery refreshes addresses and observed facts.
+  Precedence for `hostname`/`endpoints` is therefore: non-empty roster pin, then authenticated live
+  discovery matching `stable_id`; if neither provides `hostname` or `endpoints[].hostname`,
+  `Config.Validate` rejects the entry (`internal/config/config.go:552-554`).
+- Address updates and identity checks use only existing primitives:
+  1. An HMAC-authenticated UDP discovery beacon (`internal/discovery/udp.go:56-82`) matching an
+     allowlisted node's `StableID` refreshes unpinned addresses for nodes declared in `roster.yaml`.
+     Beacons whose `StableID` is in `allow_stable_ids` but **absent** from `roster.yaml` are
+     surfaced by `axis config discover` as allowlisted pending peers (showing observed name,
+     `stable_id`, and IP so the operator can add them to `roster.yaml` and supply `ssh_user` in
+     `local.yaml`); `apply` does not silently invent `roster.yaml` entries or render nodes lacking
+     `ssh_user`.
+  2. Pinned `roster.yaml` / `--roster` entries (including off-subnet or cross-site peers) can be
+     optionally corroborated by `axis config discover` via `axis`'s existing `known_hosts`-verified
+     SSH transport (`internal/transport/ssh.go`) and a narrow exported wrapper
+     `facts.RemoteNodeIdentity(ctx context.Context, exec transport.Executor) *models.NodeIdentity`
+     (which wraps `transport.WithBashForced`, probes `uname -s`, and delegates to existing
+     `detectRemoteNodeIdentity` at `internal/facts/identity.go:59-76`). No new SSH signing protocol
+     and no change to `internal/discovery` or fact schemas/collector output are added.
 - A peer that beacons but is not allowlisted is reported by `discover` and excluded from renders.
 - `--roster PATH` is an authoring override input (for `render`, `diff`, `apply`), not a second
   membership authority: every `stable_id` in the active roster (`~/.axis/roster.yaml` or `--roster`)
@@ -173,10 +182,12 @@ nodes and their `hostname`/`endpoints`, before the first render.
 
 ### Migration
 
-`axis config apply --migrate` is the one-time bridge from hand-maintained configs:
+`axis config apply --migrate` requires default `--scope all` (rejecting explicit `--scope nodes` or
+`--scope ai` with `--migrate requires --scope all`) and bridges hand-maintained configs in six steps:
 
-1. **Pre-flight checks (no backups or writes yet):** Load `nodes.yaml` via `config.Parse` and
-   optional `ai.yaml` via `LoadAIOrEmpty` (checking whether `ai.yaml` actually exists on disk).
+1. **Pre-flight checks (no backups or writes yet):** Reject explicit partial `--scope`, then load
+   `nodes.yaml` via `config.Parse` and optional `ai.yaml` via `LoadAIOrEmpty` (checking whether
+   `ai.yaml` actually exists on disk).
    - If the active generated file(s) already begin with `# Code generated by axis config render.` AND
      `bootstrap.yaml`/`roster.yaml`/`local.yaml` already exist matching disk (or would produce
      byte-identical generated output with valid headers), `--migrate` is an idempotent no-op
@@ -184,16 +195,21 @@ nodes and their `hostname`/`endpoints`, before the first render.
    - Reject missing/empty `discovery.secret` and any node missing `stable_id` (a `name` is not a
      stable identity).
 2. **Resolve hub and AI migration state (when `ai.yaml` exists on disk):**
-   - Require `ai.yaml`'s migrated `roles` map to be non-empty.
-   - Identify the hub backend in existing `ai.yaml`: (a) a backend literally named `hub`, else (b) the
-     unique `kind: openai-compatible` backend referenced by any role whose `base_url` matches
-     `--hub-url` (if supplied), else (c) the sole `kind: openai-compatible` backend referenced by
-     roles (for example `local-hub` in `ai.example.yaml:19-24`) when unambiguous. If multiple
-     `openai-compatible` candidates exist without `--hub-url` disambiguation, fail with a named
-     ambiguity error listing candidate backend names.
-   - If `ai.yaml` has non-empty roles referencing a hub (or `--hub-url` is passed), seed
-     `bootstrap.hub_url` from the detected hub's `base_url` or `--hub-url` (named error if neither is
-     available when roles reference `hub`).
+   - Explicitly enforce `len(ai.Roles) > 0` before proceeding (an empty `roles: {}` validates under
+     `LoadAI`/`ParseAI` and must be rejected explicitly by migration).
+   - Identify an optional cluster hub backend in existing `ai.yaml`: (a) a backend literally named
+     `hub`, else (b) an unbound (`node == ""`) `kind: openai-compatible` backend referenced by any role
+     whose `base_url` matches `--hub-url` (if supplied), else (c) the sole unbound (`node == ""` AND
+     `advertise_url == ""`) `kind: openai-compatible` backend referenced by roles (for example
+     `local-hub` in `ai.example.yaml:19-24`). If multiple eligible unbound candidates exist without
+     `hub` or `--hub-url`, fail with a named ambiguity error listing candidate backend names.
+   - Node-bound `openai-compatible` engines (where `node != ""` or `advertise_url != ""`, such as a
+     local per-node `llama.cpp`/`mlx`/`vLLM` endpoint) are **never** promoted to `hub` by fallback
+     2(c); if no hub matches 2(a)–(c), migrate `ai.yaml` as a hubless local-only AI config, keeping
+     those backends in `local.yaml` `ai.backends` with `node` and `advertise_url` intact and leaving
+     `bootstrap.hub_url` empty unless `--hub-url` is supplied.
+   - If a hub backend is detected (or `--hub-url` is passed), seed `bootstrap.hub_url` from it; if a
+     role literally references `hub` without any resolvable `hub_url`, fail with a named error.
    - When `ai.yaml` does **not** exist on disk (`os.IsNotExist`): preserve `nodes.yaml`-only state!
      Seed `bootstrap.hub_url` from `--hub-url` if provided (else leave empty), omit the `ai:` block
      (or leave `ai.roles` empty) in `local.yaml`, and generate/verify only `nodes.yaml` without
@@ -206,63 +222,77 @@ nodes and their `hostname`/`endpoints`, before the first render.
    - `local.yaml`: `discovery`, top-level local sections (`agent`, `chat`, `ai_providers`, `inference`,
      `mcp_servers`, `webhooks`, `allowed_internal_hosts`), per-node `ssh_user`, `role`, `ssh_port`,
      `timeout_sec`, `dial_timeout_sec`, `collect_timeout_sec`, `system_reserve_mb`, `labels`; and,
-     when `ai.yaml` existed, `ai.hub` (`api_key_env`, `api_key_file` from the detected hub), all
-     remaining non-hub `ai.backends` (preserving `kind`, `base_url`, `advertise_url`, `node`,
+     when `ai.yaml` existed, optional `ai.hub` (`api_key_env`, `api_key_file` from the detected hub),
+     all remaining non-hub `ai.backends` (preserving `kind`, `base_url`, `advertise_url`, `node`,
      `enabled`, `api_key_env`, `api_key_file`), and all `ai.roles` (preserving `model`, `require_arch`,
-     and rewriting the detected hub backend name in `prefer` to reserved `hub`).
-4. **Render, probe, and validate in memory BEFORE creating any `.bak-*` backup or writing files:**
+     and rewriting any detected hub backend name in `prefer` to reserved `hub`).
+4. **Render, probe, and validate in memory BEFORE creating any backups or writing files:**
    - Render `nodes.yaml` bytes and validate via `config.Parse` (`nodes` + `discovery` + optional
      sections); if `ai.yaml` exists (or `local.yaml` defines `ai.roles`), resolve credentials, run
-     required AI probes, render `ai.yaml` bytes, and validate via `config.ParseAI` (proving `roles`
-     is non-empty). Any validation or probe failure aborts before writing any backup or config file.
-5. **Back up and atomically write:**
+     required AI probes, render `ai.yaml` bytes, validate via `config.ParseAI`, and explicitly prove
+     `len(renderedAI.Roles) > 0`. Any validation or probe failure aborts before creating any `.bak-*`
+     backups or writing intent/config files.
+5. **Confirm, write intent files, then replace generated config(s):**
    - Prompt for confirmation (unless `--yes`; non-TTY without `--yes` fails cleanly before any write).
-   - Write `nodes.yaml` (and `ai.yaml` when generated) via `WriteGenerated` (which creates 0600
-     `<path>.bak-<UTC>` backups using `nextBackupPath` only when changing disk bytes), and atomically
-     write `bootstrap.yaml`, `roster.yaml`, and `local.yaml` (`0600`).
+   - Atomically write new intent files (`bootstrap.yaml`, `roster.yaml`, `local.yaml`, `0600`) first;
+     if writing any intent file fails, remove any newly written intent files and abort with `nodes.yaml`
+     and `ai.yaml` untouched and zero `.bak-*` files.
+   - Replace `nodes.yaml` (and `ai.yaml` when generated) via `WriteGenerated` (creating 0600
+     `<path>.bak-<UTC>` backups via `nextBackupPath`). If replacing a generated file fails after
+     creating intent files (or swapping the first generated file), restore replaced generated files
+     from their `.bak-*` backups (or remove if newly created) and remove newly created migration intent
+     files so `~/.axis/` returns cleanly to its pre-migration state.
 6. A second `--migrate` run is a clean idempotent no-op (`Changed=false`, zero new backups).
 
 ### AI source
 
-When `local.yaml` defines no `ai.roles` and `--scope ai` is not requested, AI rendering and probes
-are skipped (`nodes.yaml`-only mode; `LoadAIOrEmpty` returns an empty valid AI config). Otherwise,
-`ai.yaml` is rendered from `bootstrap.hub_url` (when `hub` is used), the `local.yaml` backend
-inventory, and `ai.roles`:
+When `local.yaml` defines no `ai.roles`: default `--scope all` skips AI rendering and probes
+(`nodes.yaml`-only mode; `LoadAIOrEmpty` returns an empty valid AI config), while explicit
+`--scope ai` fails with a named error (`no ai.roles configured in local.yaml`). Otherwise (`len(local.AI.Roles) > 0`),
+AI render enforces `len(rendered.Roles) > 0` explicitly alongside `config.ParseAI` (since `ParseAI`
+keeps `LoadAI`'s allowance for empty `roles: {}`), and renders `ai.yaml` from `local.yaml` backends,
+`ai.roles`, and optional `bootstrap.hub_url`:
 
-- Backend name `hub` is reserved. When any role references `hub` in `prefer` (or `--scope ai` renders
-  with `bootstrap.hub_url` set), the generated `hub` entry is `{name: hub, kind: openai-compatible,
-  base_url: bootstrap.hub_url}` with optional `api_key_env`/`api_key_file` copied from `local.yaml`
-  `ai.hub`. Do **not** emit an `auth:` key (unsupported by `AIBackendConfig`, `internal/config/ai.go:24-51`,
-  and rejected by `decodeStrictAI` `KnownFields(true)` at `ai.go:118-120`); an unauthenticated hub
-  simply omits `api_key_env` and `api_key_file`. Do **not** add a `node:` binding to `hub`: a router
-  serving multiple nodes is not local to one worker, and `node:` alters `BackendIsLocal`
-  (`internal/llmrouter/probe.go:194-205`) and placement hints.
+- Backend name `hub` is reserved. When any role in `local.yaml` references `hub` in `prefer`,
+  `bootstrap.hub_url` must be non-empty and the generated `hub` entry is `{name: hub, kind:
+  openai-compatible, base_url: bootstrap.hub_url}` with optional `api_key_env`/`api_key_file` copied
+  from `local.yaml` `ai.hub` (omitting `hub` cleanly for hubless local-only AI configs even under
+  `--scope ai`). Do **not** emit an `auth:` key (unsupported by `AIBackendConfig`,
+  `internal/config/ai.go:24-51`, and rejected by `decodeStrictAI` `KnownFields(true)` at
+  `ai.go:118-120`); an unauthenticated hub simply omits `api_key_env` and `api_key_file`. Do **not**
+  add a `node:` binding to `hub`: a router serving multiple nodes is not local to one worker, and
+  `node:` alters `BackendIsLocal` (`internal/llmrouter/probe.go:194-205`) and placement hints.
 - If `local.yaml` `ai.hub` (or any enabled local backend) sets `api_key_env` and/or `api_key_file`,
   `cmd/axis/config.go` must resolve it before probing via `secrets.Resolve`
   (`internal/secrets/secrets.go:27`); an `ErrNotFound` or unreadable file error is a named render
   error (never swallowed via `ResolveOrEmpty`).
 - Every backend name in `ai.roles[].prefer` must be either `hub` or defined in `local.yaml`
   `ai.backends`; any unknown backend reference is a named render error.
-- Probe `hub` (when referenced or configured) and each local backend in `local.yaml` via
+- Probe `hub` (when referenced by any role) and each local backend in `local.yaml` via
   `llmrouter.ProbeBackendForNodes(ctx, b, client, renderedNodes)` (`internal/llmrouter/probe.go:49`),
   which respects `enabled: false` (`OK: false, Message: "disabled"`), selects `AdvertiseURL` for
   non-local peer nodes (`internal/llmrouter/probe.go:178-189`), and normalizes OpenAI-compatible
   URLs via `probeURL` (`internal/llmrouter/probe.go:228-247`: trim trailing `/`; append `/models` if
   `base` ends in `/v1`, else `/v1/models`). Never blindly concatenate `hub_url + "/v1/models"`.
-- If `hub` is required by any role and its probe fails (`!probe.OK`, including connection error, 5xx,
-  timeout, or `/models` list parse failure), abort render with a named error and write nothing (do not
-  confuse hub unreachability with "model absent").
-- Include each non-hub local backend in generated `ai.yaml` **only** when `probe.OK` is true (so
-  disabled or unreachable local backends are omitted). Remove any omitted backend from every role's
-  `prefer` list; if a role's `prefer` becomes empty, fail render with a named error rather than
-  emitting a file rejected by `LoadAI`/`ParseAI` (`internal/config/ai.go:201-208`). Preserve
-  `require_arch` on roles.
+- **Guarding 2xx unparseable `/models` responses:** `ProbeBackendForNodes` returns `OK: true,
+  Models: nil` (and `"reachable; model list parse incomplete: ..."`) when an HTTP 2xx body fails JSON
+  parsing (for example a reverse-proxy HTML error/login page), whereas valid empty JSON `{"data":[]}`
+  or `{"models":[]}` yields non-nil `[]string{}` (`internal/llmrouter/probe.go:105-115, 249-284`).
+  `cmd/axis/config.go` must treat **`!probe.OK || probe.Models == nil`** as a probe failure:
+  - When `hub` is referenced and `!probe.OK || probe.Models == nil`, abort render with a named
+    hub-probe/parse error and write nothing (never misreporting a broken `/models` endpoint as
+    "model absent").
+  - For non-hub local backends, include a backend in generated `ai.yaml` **only** when
+    `probe.OK && probe.Models != nil`; treat disabled, unreachable, or unparseable backends as
+    unhealthy, omit them from `ai.yaml`, and remove them from every role's `prefer` list. If any
+    role's `prefer` becomes empty, fail render with a named error rather than emitting a file
+    rejected by `LoadAI`/`ParseAI` (`internal/config/ai.go:201-208`). Preserve `require_arch` on
+    roles.
 - **Exact model ID validation:** For each role, match `role.Model` using exact string equality against
-  reported `probe.Models` (never `llmrouter.ModelListed`'s tag-tolerant match at
+  reported non-nil `probe.Models` (never `llmrouter.ModelListed`'s tag-tolerant match at
   `internal/llmrouter/probe.go:289-303`). If `hub` remains in `role.prefer`, verify exact `role.Model`
   is in `hub`'s reported `Models`; for local-only roles (for example `prefer: [local-ollama]`), verify
-  exact `role.Model` appears in at least one surviving healthy preferred backend's reported `Models`
-  (when that backend reports a parsed model list).
+  exact `role.Model` appears in at least one surviving healthy preferred backend's reported `Models`.
 
 ### Writer
 
@@ -271,7 +301,9 @@ hand-edited comment preservation because their body is wholly rendered. Add two 
 `internal/config`:
 
 ```go
-// ParseAI reads, normalizes, and strictly validates raw ai.yaml bytes.
+// ParseAI reads, normalizes, and strictly validates raw ai.yaml bytes,
+// matching LoadAI validation rules identically (including empty roles: {}).
+// Migration and AI render enforce len(roles) > 0 explicitly at the config command layer.
 func ParseAI(data []byte) (*AIConfig, error)
 
 // WriteGenerated writes header + body to path atomically with mode 0600,
@@ -361,7 +393,8 @@ Rules:
 - `apply` is the only command that writes live configs. Without `--yes`, it prints exact target
   paths and prompts cleanly; non-TTY stdin without `--yes` fails with a named refusal, never hangs.
   Without `--migrate`, `apply` refuses to overwrite an existing headerless file (`not generated; run
-  axis config apply --migrate`) and leaves it byte-identical.
+  axis config apply --migrate`) and leaves it byte-identical. `--migrate` requires `--scope all` and
+  refuses explicit `--scope nodes` or `--scope ai` (`--migrate requires --scope all`).
 - `diff` returns `0` equal, `1` drift, `2` config/probe error (never placement exit codes).
 - `verify` returns non-zero on a bad header, schema error, digest mismatch, or missing scoped file.
 - `axis init` refuses generated files as above.
@@ -375,9 +408,13 @@ Rules:
   strict schema decoders/validators for `bootstrap.yaml`, `roster.yaml`, and `local.yaml` (`config`
   is Support/Stable and must **not** import `internal/secrets`, which is Experimental per
   `hack/lifecycle-check.go:56`).
+- `internal/facts` exports only the narrow helper `RemoteNodeIdentity(ctx, exec)` wrapping existing
+  `detectRemoteNodeIdentity` (`internal/facts/identity.go:59-76`) with `uname -s` /
+  `transport.WithBashForced` (no fact schema or snapshot contract changes).
 - `cmd/axis/config.go` composes `internal/discovery` beacons, optional SSH identity reads
-  (`internal/transport` + `internal/facts`), secret validation (`internal/secrets` `secrets.Resolve`),
-  AI probing (`internal/llmrouter` `ProbeBackendForNodes`), and calls `internal/config` pure helpers.
+  (`internal/transport` + `facts.RemoteNodeIdentity`), secret validation (`internal/secrets`
+  `secrets.Resolve`), AI probing (`internal/llmrouter` `ProbeBackendForNodes`), and calls
+  `internal/config` pure helpers.
 - `internal/discovery` and `internal/llmrouter` remain unchanged consumers; zero imports from agent,
   MCP, or HTTP layers.
 - No new package is needed for phase 1. A new package would need an import-tier justification and
@@ -423,24 +460,35 @@ resolves at runtime.
   matching rejects `coder` against catalog `coder:latest` while local-only roles (`prefer:
   [local-ollama]`) validate against `local-ollama` models; disabled/dead backends are omitted and
   pruned from `prefer`, failing cleanly if a role becomes empty.
+- `internal/facts`: `RemoteNodeIdentity` forces non-login bash (`transport.WithBashForced`), detects
+  remote OS via `uname -s`, and returns the Linux/Darwin stable ID via `detectRemoteNodeIdentity`
+  without mutating fact schemas or full collector behavior.
 - `internal/config` & migration: migrating a `nodes.yaml`-only fixture with absent `ai.yaml` and all
   peers offline succeeds cleanly preserving `labels`, `endpoints`, `webhooks`,
   `allowed_internal_hosts`, `ssh_port`, timeouts, and `system_reserve_mb` in `roster.yaml`/`local.yaml`
   without fabricating `ai.yaml`; a node lacking `stable_id` fails; migrating `ai.yaml` with `local-hub`,
   `advertise_url`, `enabled: false`, and `require_arch` rewrites `prefer` cleanly to `hub`, while
-  multiple `openai-compatible` candidates without `--hub-url` fail with a named ambiguity error;
-  a failing migration validation/probe writes zero `.bak-*` files; a second `--migrate` run is an
-  idempotent no-op (`Changed=false`).
-- `cmd/axis`: `discover` and `diff` leave live files byte-identical; `render --out` with a file path
-  for `--scope all` fails cleanly and with a directory writes both files; unresolvable `ai.hub`
-  `api_key_env`/`api_key_file` fails cleanly before write; `apply` without `--migrate` refuses a
-  headerless existing file; `apply` lists backups, prints the restart pointer when
-  discovery/membership changes, and refuses without `--yes` on non-TTY stdin; `apply --roster`
-  refuses unallowlisted entries.
-- `cmd/axis`: failed second rename restores the first file byte-for-byte when `BackupPath != ""` and
-  deletes the newly created first file when `BackupPath == ""`; a hub 503 leaves both live files
-  byte-identical; an unallowlisted beacon peer is excluded; `axis init` refuses a generated file and
-  leaves it byte-identical.
+  multiple unbound `openai-compatible` candidates without `--hub-url` fail with a named ambiguity error;
+  migrating an `ai.yaml` whose sole `openai-compatible` backend is node-bound (`node: node-a`,
+  `advertise_url: ...`) preserves it in `local.yaml` `ai.backends` with `node`/`advertise_url` intact
+  and leaves `bootstrap.hub_url` empty rather than promoting it to `hub`; migrating an `ai.yaml` with
+  `roles: {}` is rejected explicitly; a failing migration validation/probe writes zero `.bak-*` files;
+  an intent-file write error removes newly written intent files before touching `nodes.yaml`/`ai.yaml`;
+  a second `--migrate` run is an idempotent no-op (`Changed=false`).
+- `cmd/axis`: `discover` and `diff` leave live files byte-identical, and `discover` reports
+  allowlisted beacon peers absent from `roster.yaml` as pending without `apply` fabricating nodes;
+  `render --scope ai` with hubless local-only roles succeeds while `render --scope ai` with no
+  `ai.roles` fails cleanly; `render --out` with a file path for `--scope all` fails cleanly and with a
+  directory writes both files; unresolvable `ai.hub` `api_key_env`/`api_key_file` fails cleanly before
+  write; `apply --migrate --scope nodes` is refused; `apply` without `--migrate` refuses a headerless
+  existing file; `apply` lists backups, prints the restart pointer when discovery/membership changes,
+  and refuses without `--yes` on non-TTY stdin; `apply --roster` refuses unallowlisted entries.
+- `cmd/axis`: a HTTP 200 non-JSON/HTML `/models` response on `hub` (`OK: true, Models: nil`) aborts
+  render with a hub-probe/parse error instead of falling through to "model absent"; an HTTP 200
+  non-JSON response on a non-hub local backend omits it and prunes `prefer` (failing cleanly if empty);
+  failed second rename restores the first file byte-for-byte when `BackupPath != ""` and deletes the
+  newly created first file when `BackupPath == ""`; a hub 503 leaves both live files byte-identical; an
+  unallowlisted beacon peer is excluded; `axis init` refuses a generated file and leaves it byte-identical.
 - `cmd/axis`: `verify` runs offline with discovery/hub unreachable; `ai.yaml` absent when `local.yaml`
   has no `ai.roles` passes default `--scope all` and keeps `doctor` silent, while `--scope ai` fails
   and missing `ai.yaml` with non-empty `ai.roles` fails `verify` and warns in `doctor`; `doctor`
