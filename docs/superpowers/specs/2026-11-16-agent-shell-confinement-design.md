@@ -366,3 +366,24 @@ Note: This is the supplied completed revision-1 review, not approval of revision
   strict combined contract on 2026-11-19; a new fresh-context review against the committed
   revision-2 SHA remains pending. The drafter did not rerun or invent review probes. Private host
   inventory and artifact locations are omitted.
+
+Kind: spec
+Reviewer: fresh-context subagent ec892853-1d64-4192-93e0-ce91a7d13015
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: 3ba204a916a308771028b646d618166b13c47474
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Major: `confine.Command` signature collided with `RunLocalShell`/`StreamLocalShell` env handling and loader scrubbing because `ld-linux` loads dynamic `bwrap` before `--unsetenv` and `cmd.Env = env` overwrote scrubbed env vars. Design 1 and Design 3 now pass `baseEnv []string` into `confine.Command` to clone and strip `LD_*`/bootstrap vars and set `TMPDIR` without process-global mutation. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+2. Major: defaulting empty `agent.Config.Confine` to `auto` broke five existing non-confinement `internal/agent` `ScopeExec`/`AutonomyFull` stub-runner unit tests on `ubuntu-latest` CI and non-ABI-9 hosts. Design 4 and Tests now specify an `internal/agent` probe-stub seam and explicit `ConfineOff`/stubbed probe updates for those suites. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+3. Major: `ScopeExec` entry notice ignored canonical root validation (misleading in `$HOME`) and lacked routing for `-p`, console/TUI, `/autonomy full`, and `DailySessionLog`. Design 5 now runs canonical root validation before emitting notices, routes by surface (`errW`, `j.note`, `session.Out`) without touching `agent.Config.Output`, and adds `DailySessionLog.LogConfinement`. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+4. Major: `Tests` omitted `cmd/axis/main_test.go` `MaybeRunHelper()` wiring and explicit coverage for peak RSS, `[confined: ...]` permission-exit detection via `*exec.ExitError` / `GuardedExecutionResult`, `LD_*` env scrubbing, symlinked `/etc/resolv.conf` preservation, and notice/`DailySessionLog` routing. Design 2, Design 3, and Tests now cover all of these explicitly. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+5. Minor: Non-goals claimed confined cache-write failures "report the denied path", contradicting Design 3's rule not to invent unprinted paths. Non-goals now specifies failing with the command's own error and the confinement notice. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+6. Minor: root validation did not reject `cwd` equal to or beneath `/dev`, `/proc`, `/run`, or `/sys` despite private/empty mounts hiding or conflicting with them. Design 4 and Tests now reject canonical `cwd` at or beneath `/dev`, `/proc`, `/run`, and `/sys`. fixed in 99ebc3c587a4c41873cad35611fda000bffdfe70.
+
+Questions:
+- When `nix` is observed in `NodeFacts.Tools`, should confined `run_shell` skip `PlanNixExecution` wrapping (`internal/execution/prepare.go:432`) or fail closed? Design 3 and Tests specify skipping optional `PlanNixExecution` when `Mode == required` and recording `"nix ephemeral wrapper skipped under shell confinement"`. verified: Design 3 documents skipping the wrapper in `PrepareExecution` rather than punching holes for Nix daemon sockets.
+- Is reusing a single sealed `memfd` `*os.File` safe across up to 6 concurrent `run_shell` calls (`internal/agent/agent.go:470`) with `bwrap --ro-bind-data`? Design 2 and Tests now require opening an independent read-only file descriptor per `confine.Command` call via `/proc/self/fd/<mfd>` (closed in parent after start/error) and testing 6-way concurrent invocations under `-race`. verified: Design 2 avoids any shared open-file-description offset race.
+
+Note: Isolated ABI-9 Landlock + `bwrap 0.11.0` + sealed memfd probes verified core filesystem, pathname/abstract UNIX socket, signal, `/dev/tty`, and `memfd` re-exec feasibility at `3ba204a9`. All six findings and both open questions are resolved in `99ebc3c587a4c41873cad35611fda000bffdfe70`, completing §8 spec approval prior to implementation.
