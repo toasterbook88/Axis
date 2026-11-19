@@ -1,7 +1,7 @@
 # Confine auto-approved `run_shell` under `--autonomy full`
 
 Date: 2026-11-16; revision 2: 2026-11-19.
-Status: revision 2 — strict combined contract adopted by operator (2026-11-19); awaiting fresh §8 spec review before implementation.
+Status: revision 2 — approved (strict combined contract adopted 2026-11-19; review findings resolved; ready for implementation).
 
 ## Decision history
 
@@ -57,8 +57,8 @@ no per-command filesystem, socket or signal confinement.
   paths and mount views, not every other name for an allowed inode.
 - Changing scores, rules or prompts in `internal/safety` or `autonomyConfirm`.
 - Writable tool caches (`GOCACHE`, `~/.cache`, `~/.npm`). Confined commands get a private `TMPDIR`
-  only; builds that must write a cache outside the working directory fail inside confinement and
-  report the denied path (Design 3).
+  only; builds that must write a cache outside the working directory fail inside confinement with
+  the command's own error and the confinement notice (Design 3).
 
 ## Design
 
@@ -78,8 +78,11 @@ no per-command filesystem, socket or signal confinement.
      sufficient) or `off`.
    - `WithPolicy(ctx, Policy)` / `FromContext(ctx)` carry the policy to the spawn site, matching the
      existing `reportLocalPID(ctx, …)` pattern in `internal/execution/vram.go:26-30`.
-   - `Command(ctx, policy, shell string, args ...string) (*exec.Cmd, error)` builds the confined
-     command or returns `ErrUnavailable` with the probe summary.
+   - `Command(ctx context.Context, policy Policy, baseEnv []string, shell string, args ...string) (*exec.Cmd, error)`
+     builds the confined command or returns `ErrUnavailable` with the probe summary. It clones
+     `baseEnv` (or `os.Environ()` if `nil`), strips loader/bootstrap env vars (`LD_*`, `GCONV_PATH`,
+     `LOCPATH`, `HOSTALIASES`, `MALLOC_TRACE`, `RESOLV_HOST_CONF`, `TMPDIR`) before spawning
+     `bwrap`, and sets `TMPDIR` to canonical `policy.TempDir` without mutating process-global env.
 
 2. **Mandatory bwrap layer and pinned re-exec helper.**
    - Before the first untrusted shell call, retain an executable image of the running axis process
@@ -87,7 +90,11 @@ no per-command filesystem, socket or signal confinement.
      lookup. Preserve its identity for the session, including when the installed pathname is
      replaced, renamed or unlinked between calls. The concrete candidate is a sealed executable
      memfd snapshot, with write/grow/shrink/seal seals, mounted read-only at a sandbox-private
-     helper path. Seal or executable-memory policy failure is unavailable, never pathname fallback.
+     helper path. Open an independent read-only file descriptor per `confine.Command` call via
+     `/proc/self/fd/<mfd>` (closed in the parent after child start or setup failure) so up to 6
+     concurrent `run_shell` calls (`internal/agent/agent.go:470`) never race on a shared open file
+     description offset when `bwrap --ro-bind-data` reads the helper image. Seal or
+     executable-memory policy failure is unavailable, never pathname fallback.
      The bwrap image used for probing and spawning is likewise pinned before shell execution;
      bootstrap loader/environment inputs must not be replaceable through writable policy roots.
      Close bootstrap image/policy/root descriptors before the payload shell starts.
@@ -106,9 +113,12 @@ no per-command filesystem, socket or signal confinement.
    - Required layout: recursively read-only host root, writable binds only for validated cwd and
      private temp, private minimal `/dev`, private `/proc` under a PID namespace, and an empty
      private `/run`. Use `--unshare-pid --die-with-parent --new-session` and no network unshare.
-     Preserve the read-only root's resolver files where usable; do not reopen host UNIX sockets
-     to repair DNS. Resolver incompatibility is reported as a command failure. `/run` masking is
-     defense in depth; Landlock provides the pathname/abstract socket boundary at all locations.
+     Preserve usable DNS resolver files: when host `/etc/resolv.conf` resolves through a symlink
+     into `/run` (e.g. `../run/systemd/resolve/stub-resolv.conf`), read its regular-file bytes
+     before spawn and supply them read-only at `/etc/resolv.conf` via `--ro-bind-data`; never bind
+     host `/run` directories or UNIX sockets. Resolver incompatibility is reported as a command
+     failure. `/run` masking is defense in depth; Landlock provides the pathname/abstract socket
+     boundary at all locations.
    - Read-only mounts supply the missing metadata boundary: outside allowed roots, content writes,
      chmod, chown, xattr and timestamp changes through host filesystem paths must fail. Nested
      mounts must also be read-only; failure to establish that layout is unavailable. No host
@@ -127,14 +137,24 @@ no per-command filesystem, socket or signal confinement.
      the extra namespace/reaper processes.
 
 3. **Spawn sites honour the policy.** `RunLocalShell` and `StreamLocalShell`
-   (`internal/execution/run_remote.go:47-82`) and `ExecuteShellWithTimeout`
-   (`internal/agent/tools.go`) read `confine.FromContext(ctx)`. With no policy or `Mode == off`
+   (`internal/execution/run_remote.go:47-82`) pass `env` directly into `confine.Command` (never
+   overwriting `cmd.Env = env` afterwards) and `ExecuteShellWithTimeout`
+   (`internal/agent/tools.go:872-899`) passes `os.Environ()`. With no policy or `Mode == off`
    they behave exactly as today. With `Mode == required` they build the command through
    `confine.Command`; on `ErrUnavailable` they return an error before any payload starts. Trusted
-   setup/probe processes may start, but no user shell starts before both layers succeed. When a
-   confined command fails with `EACCES`/`EROFS`, the tool result keeps the shell's own error text
-   and appends `[confined: host filesystem mutations limited to <cwd> and $TMPDIR; reads/network
-   remain available]`. Do not infer a denied pathname if the command did not report it.
+   setup/probe processes may start, but no user shell starts before both layers succeed. Because
+   `cmd.Wait()` returns `*exec.ExitError` rather than kernel `errno`, on non-zero exit under
+   `Mode == required` when captured output contains permission/read-only failure markers
+   (`Read-only file system`, `Permission denied`, `Operation not permitted`, `EROFS`, `EACCES`),
+   all three shell runners append `[confined: host filesystem mutations limited to <cwd> and $TMPDIR;
+   reads/network remain available]` to the tool result (preserved inside `GuardedExecutionResult`
+   by `guardedAgentShellRunner` at `cmd/axis/agent.go:595-607`), without fabricating an unprinted
+   denied pathname.
+   - **Skip optional Nix wrapper under confinement.** In `PrepareExecution`
+     (`internal/execution/prepare.go:432`), when `confine.FromContext(ctx)` carries
+     `Mode == required`, skip optional `PlanNixExecution` wrapping and append reasoning note
+     `"nix ephemeral wrapper skipped under shell confinement"`, rather than opening host Nix
+     daemon sockets or breaking ordinary tools (`go`, `git`, `python3`) on NixOS hosts.
    - **Required policy bypasses daemon HTTP.** In `guardedAgentShellRunner`, branch on the required
      policy before `tryGuardedAgentShellViaDaemon`, then call the in-process guarded execution path
      with the same context. Preserve safety checks, canonical local-target checks, reservations,
@@ -145,43 +165,70 @@ no per-command filesystem, socket or signal confinement.
 
 4. **Agent attaches the policy only for auto-approvable shell.** In `Agent.dispatchShell`
    (`internal/agent/dispatch.go:338-339`), when the active scope is `ScopeExec` and confinement mode is
-   `auto`, the agent creates a per-call private temp dir (`os.MkdirTemp`, removed after the call),
-   sets `TMPDIR` for the command, and wraps `ctx` with `Policy{Writable: [process cwd], TempDir,
-   Mode: required}` before calling the shell runner.
+   `auto`, the agent creates a per-call private temp dir (`os.MkdirTemp`, removed after the call)
+   and wraps `ctx` with `Policy{Writable: [process cwd], TempDir, Mode: required}` before calling
+   the shell runner (`confine.Command` sets `TMPDIR` cleanly in the child `cmd.Env` without
+   mutating process-global env). Expose an `internal/agent` probe-stub seam (`AGENTS.md §7` restore
+   pattern) so unit tests run deterministically on non-ABI-9 hosts; update existing non-confinement
+   `ScopeExec`/`AutonomyFull` stub-runner tests (`ask_always_test.go`,
+   `sessionlog_compaction_test.go`, `scope_test.go`, `deferred_tools_test.go`,
+   `session_approval_test.go`) to use explicit `Confine: ConfineOff` or a stubbed sufficient probe.
    - The policy is attached for every `run_shell` in full mode, including commands the operator
      confirmed after a ≥75 score, so one session has one write boundary.
-   - When `Probe().Sufficient()` is false, `run_shell` returns `confinement unavailable on this host
-     (<summary>); run_shell is disabled under --autonomy full. Re-run with --confine off to accept
-     unconfined shell, or use a lower autonomy mode.` The session continues; other tools work.
+   - When `Probe().Sufficient()` is false or root validation fails, `run_shell` returns `confinement
+     unavailable on this host (<summary>); run_shell is disabled under --autonomy full. Re-run
+     with --confine off to accept unconfined shell, or use a lower autonomy mode.` The session
+     continues; other tools work.
    - Canonicalize cwd, the session's operator HOME and every allowed root, including TempDir,
      using absolute existing directory paths with symlinks resolved. Refuse missing, ambiguous
-     or unresolvable roots/HOME. Reject filesystem root and any allowed root equal to HOME or an
-     ancestor of HOME, using path components rather than string-prefix comparison. A repo beneath
-     HOME may be allowed; granting its ancestor must not grant all of HOME. Pin validated directory
-     identities through setup and reject symlink/rename/mount identity changes; never validate a
-     spelling and then silently bind a different directory. Use simulated HOME trees in tests.
+     or unresolvable roots/HOME. Reject filesystem root, any allowed root equal to HOME or an
+     ancestor of HOME, and any canonical root equal to or beneath `/dev`, `/proc`, `/run`, or
+     `/sys` (whose private mounts replace or conflict with host paths), using path components rather
+     than string-prefix comparison. A repo beneath HOME may be allowed; granting its ancestor must
+     not grant all of HOME. Pin validated directory identities through setup and reject
+     symlink/rename/mount identity changes; never validate a spelling and then silently bind a
+     different directory. Use simulated HOME trees in tests.
    - `axis_run_task`, console `!cmd` and every non-exec scope never get a policy.
 
 5. **Operator control and visibility.**
-   - `axis agent --confine auto|off` (default `auto`), wired through `agent.Config.Confine`,
-     `agentSessionParams` / `buildAgentSessionConfig`, and the console path `agentStartupInputs` →
-     `consoleStartupJob.buildAgent`, the same two startup paths as `--eager-tools`
-     (`cmd/axis/agent.go`). `axis tui` keeps its existing flag set and uses `auto`.
-   - When a session enters `ScopeExec` (startup or `/autonomy full`), the agent emits one notice:
+   - `axis agent --confine auto|off` (default `auto`; empty `agent.Config.Confine` defaults to `auto`),
+     wired through `agent.Config.Confine`, `agentSessionParams` / `buildAgentSessionConfig`, and
+     the console path `agentStartupInputs` → `consoleStartupJob.buildAgent`, the same two startup
+     paths as `--eager-tools` (`cmd/axis/agent.go`). `axis tui` keeps its existing flag set and uses
+     `auto`.
+   - When a session enters `ScopeExec` (startup or `/autonomy full`), evaluate BOTH
+     `Probe().Sufficient()` AND Design 4's canonical root validation (`cwd`, `HOME`, forbidden mount
+     trees) **before** emitting one notice:
      `shell confinement: landlock ABI <n> + read-only bwrap (host mutations: <cwd>, $TMPDIR;
      reads/credentials/network remain available)`, or
      `shell confinement: unavailable (<reason>); run_shell disabled` / `shell confinement: off
-     (--confine off)`. The daily session log records the same summary once per session. There is
-     no Landlock-only "confined" notice. Explicit off means unconfined and is never selected by
-     a tool, a failed probe, a confirmation response or an automatic retry.
+     (--confine off)`.
+     Route the notice cleanly by surface (never writing into `agent.Config.Output` in `-p` or TUI):
+     to `errW` (`cmd.ErrOrStderr()`) for `axis agent -p`, plain REPL, and one-shot runs so stdout
+     stays clean; to `j.note(console.StatusInfo|StatusFailed, notice)` for Bubble Tea console and
+     `axis tui` (`cmd/axis/agent_console_startup_job.go:340-379`); and to `session.Out` right after
+     switching mode in `/autonomy full` (`cmd/axis/agent_slash.go:150-165`). Record the same summary
+     once per session via `DailySessionLog.LogConfinement(summary string)`
+     (`internal/agent/sessionlog.go`, JSONL event `"session.confinement"` with `summary`,
+     `autonomy: "full"`, `session_id`, `ts`). There is no Landlock-only "confined" notice. Explicit
+     off means unconfined and is never selected by a tool, a failed probe, a confirmation response
+     or an automatic retry.
 
 ## Tests
 
 - `internal/confine` (all mutation/listener targets are synthetic temporary fixtures):
   - an injected matrix accepts only ABI >= 9 AND usable bwrap; every other combination refuses;
+  - `Command` strips loader/bootstrap env vars (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `GCONV_PATH`, etc.)
+    from `baseEnv` / `os.Environ()` while setting canonical `TMPDIR`, and concurrent 6-way
+    confined invocations open independent `/proc/self/fd/<mfd>` descriptors under `-race` without
+    file-offset corruption;
   - combined-layer integration: content write, truncate, chmod, permitted-owner chown, setxattr
     and utime succeed on suitable fixtures inside allowed roots and fail on outside siblings;
     check outside content, mode, owner, xattrs and timestamps afterwards, not only exit status;
+  - symlinked `/etc/resolv.conf -> ../run/...` contents remain readable inside the sandbox via
+    `--ro-bind-data` without exposing host `/run` directories or UNIX sockets;
+  - peak-RSS attribution through `bwrap`/reaper processes is measured and verified against direct
+    process usage rather than assumed identical;
   - a writable nested mount outside allowed roots stays read-only; missing privileges to construct
     this fixture are a reported skip, never evidence the nested-mount boundary passed;
   - connect/send to pathname UNIX listeners created by the parent is denied outside roots,
@@ -190,9 +237,10 @@ no per-command filesystem, socket or signal confinement.
   - `Command` with an injected insufficient `Capability` returns `ErrUnavailable` and starts no
     payload; failures during mount/ruleset/helper setup never execute a payload marker or retry
     with one layer, daemon or a plain shell; explicit `Mode == off` returns the plain command;
-  - filesystem root, simulated HOME, its ancestor and symlink aliases are rejected; a component
-    sibling such as `home-other` is not mistaken for HOME; a repo beneath HOME is allowed;
-    replaced/renamed roots during setup fail closed rather than widening the grant;
+  - filesystem root, simulated HOME, its ancestor, symlink aliases, and paths equal to or beneath
+    `/dev`, `/proc`, `/run`, and `/sys` are rejected; a component sibling such as `home-other` is not
+    mistaken for HOME; a repo beneath HOME is allowed; replaced/renamed roots during setup fail
+    closed rather than widening the grant;
   - replace/unlink the launched axis pathname between two shell calls, put a fake helper at the
     old path and change PATH: the second call still uses the original pinned helper image and
     denies an outside mutation, or refuses before payload execution. Repeat for bwrap identity;
@@ -202,26 +250,37 @@ no per-command filesystem, socket or signal confinement.
     server successfully, demonstrating the declared read/network authority without real credentials;
   - background descendants are terminated and reaped on cancel/timeout before TempDir removal;
   - helper argv/policy encoding round-trips, and `MaybeRunHelper` is a no-op for other argv.
-  The package and `internal/execution` / `internal/agent` tests call `confine.MaybeRunHelper()` from
-  `TestMain` so the test binary can act as the helper. Integration tests require both mechanisms;
-  unsupported environments report exact skip reasons. Mocked refusal tests do not skip. Before
-  claiming the contract verified, run the combined integration suite on a capable isolated Linux
-  environment and retain its output; no such combined result is claimed in this proposed revision.
+  `internal/confine`, `internal/execution`, `internal/agent`, and `cmd/axis/main_test.go` call
+  `confine.MaybeRunHelper()` from `TestMain` so test binaries act as the helper. Integration tests
+  require both mechanisms; unsupported environments report exact skip reasons. Mocked refusal tests
+  do not skip. Before claiming the contract verified, run the combined integration suite on a
+  capable isolated Linux environment and retain its output.
 - `internal/execution`: `RunLocalShell` and `StreamLocalShell` with a required policy confine writes
-  (or skip on insufficient hosts); with an insufficient injected probe they return the error and run
-  nothing; without a policy their argv is unchanged.
-- `internal/agent`: in `AutonomyFull`, an auto-approved `run_shell` reaches the runner with a
-  required policy whose `Writable` is the cwd and whose `TempDir` is removed afterwards; with an
-  insufficient probe `run_shell` returns the unavailable error and the runner is never called; with
-  `--confine off` no policy is attached; `AutonomyDefault` / `AutonomyEdit` and `axis_run_task` never
-  attach a policy; invalid/canonical HOME-containing roots are refused in full mode.
+  (or skip on insufficient hosts), preserve caller `env` while keeping scrubbed `LD_*`/`TMPDIR`,
+  append the `[confined: ...]` notice on permission/read-only non-zero exit without fabricating a
+  path, and skip `PlanNixExecution` in `PrepareExecution` when `Mode == required` with `nix` in
+  `NodeFacts.Tools` (emitting `"nix ephemeral wrapper skipped under shell confinement"`); with an
+  insufficient injected probe they return the error and run nothing; without a policy their argv is
+  unchanged.
+- `internal/agent`: in `AutonomyFull` (with stubbed sufficient probe where needed on non-ABI-9 hosts,
+  and existing non-confinement `ScopeExec` tests updated to `ConfineOff`/stubbed probe), an
+  auto-approved `run_shell` reaches `ExecuteShellWithTimeout` with a required policy whose
+  `Writable` is cwd and whose `TempDir` is removed afterwards, appends `[confined: ...]` on
+  permission/read-only exit errors, and scrubs loader env vars; with an insufficient probe
+  `run_shell` returns the unavailable error and the runner is never called; with `--confine off` no
+  policy is attached; `AutonomyDefault` / `AutonomyEdit` and `axis_run_task` never attach a policy;
+  invalid/HOME/`/run`/`/dev`/`/proc`/`/sys` roots are refused; `DailySessionLog.LogConfinement`
+  writes `session.confinement` once per session.
 - `cmd/axis`: `--confine` parses `auto|off`, rejects other values, and reaches `agent.Config` through
-  both startup paths; the startup notice names both mechanisms and the read/network limitation.
-  With a reachable stub daemon, a required policy never invokes daemon metadata/execution clients:
-  it reaches in-process guarded execution and the actual confined spawn denies a sibling write.
-  Inject local/setup errors and assert no daemon, remote or plain-shell fallback. Keep the existing
-  daemon-first regression for no-policy calls. Stub safety/reservation/local-target seams separately
-  to prove that bypassing HTTP preserves guarded execution rather than bypassing its checks.
+  both startup paths; startup in valid cwd emits the combined notice on `errW` in `-p` mode
+  (leaving stdout clean) and via `j.note` in console/TUI; starting in `$HOME` emits `unavailable`;
+  `/autonomy full` emits the confinement notice on `session.Out`. With a reachable stub daemon, a
+  required policy never invokes daemon metadata/execution clients: it reaches in-process guarded
+  execution, preserves `[confined: ...]` inside `GuardedExecutionResult`, and the actual confined
+  spawn denies a sibling write (via `cmd/axis/main_test.go` `MaybeRunHelper`). Inject local/setup
+  errors and assert no daemon, remote or plain-shell fallback. Keep the existing daemon-first
+  regression for no-policy calls. Stub safety/reservation/local-target seams separately to prove that
+  bypassing HTTP preserves guarded execution rather than bypassing its checks.
 
 ## Alternatives
 
