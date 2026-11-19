@@ -756,3 +756,21 @@ Questions:
 - Should `local.yaml` reject any backend named `hub` (case-insensitive) even without role references, exclude disabled (`enabled: false`) `openai-compatible` backends from fallback 2(b)/(c), and reject `--hub-url` conflicts against a literal `hub` backend in 2(a)? Yes, strict validation rejects `hub` in `local.yaml.ai.backends` unconditionally, disabled backends are excluded from fallback 2(b)/(c), and normalized URL mismatches between `--hub-url` and literal `hub` fail with a conflict error. verified: Field ownership, Migration Step 2, and Tests define and cover all three rules.
 
 Note: Original revise verdict against `f0cef23e` retained honestly; fresh-context re-review against `660413e9` + this review record follows before any code starts.
+
+Kind: spec
+Reviewer: fresh-context subagent 49650de3-1c51-4e8e-acad-0c15bc9da3b7
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: d790caabc472638e04a449b7e6b3a8cb683b47ba
+Date: 2026-11-19
+Verdict: revise
+
+1. Major: Migration Step 1's intent-file guard left partial-intent (1–2 intent files beside headered `nodes.yaml`) and mixed-header (`nodes.yaml` headered + headerless `ai.yaml`) states unprotected. Step 1 now uses an unconditional `else` guard refusing `--migrate` whenever Branch 1 does not apply and any intent file exists on disk, with regression tests for both states. fixed in 1c1138f694b87556d185a94cb791462afeb9c247.
+2. Major: Migration Step 2(a)/(b)/(c) contradicted itself on `advertise_url`, left `--hub-url` ambiguous/unused against non-literal hubs, and skipped `kind`/`IsEnabled`/`node`/`advertise_url` checks on literal `hub`. Step 2(a)/(b)/(c) now enforces `kind == "openai-compatible"`, `IsEnabled()`, `node == ""`, and `advertise_url == ""` consistently, fails on `--hub-url` mismatches against eligible unbound backends, and excludes fallback 2(c) when `--hub-url != ""`. fixed in 1c1138f694b87556d185a94cb791462afeb9c247.
+3. Major: daemon-reachable `GET /v2/beacons` blocked `WatchBeaconChanges` fallback even when `axis serve` was not listening on `:42424`, ignored `local.Discovery.Enabled`, and ignored `nodes.yaml` vs `local.yaml` `udp_port`/`secret` drift. Spec now gates beacon lookups on `local.Discovery.Enabled`, returns `{listening, udp_port, beacons}` (without secrets) from `BeaconsStatus()`/`GET /v2/beacons`, falls back cleanly when `!listening` or on a different port, and enforces same-port secret checks against `nodes.yaml`. fixed in 1c1138f694b87556d185a94cb791462afeb9c247.
+4. Minor: `--roster` support on `discover` and `local.yaml.nodes` schema notation were inconsistent. Spec adds `[--roster PATH]` to `axis config discover` and aligns Tests notation to `local.yaml.nodes.<name>` including `name`. fixed in 1c1138f694b87556d185a94cb791462afeb9c247.
+
+Questions:
+- Should any non-empty address pin (`hostname != "" || len(endpoints) > 0`) on an endpoints-only `roster.yaml` entry suppress filling `hostname` from live beacons? Yes, `hostname != "" || len(endpoints) > 0` counts as a complete pin (`hostname` remains authored-only per `internal/config/config.go:404-407`), with an endpoints-only migration/render round-trip test added. verified: Roster source and Tests define this explicitly.
+
+Note: Original revise verdict against `d790caab` retained honestly; fresh-context re-review against `1c1138f6` + this review record follows before any code starts.
