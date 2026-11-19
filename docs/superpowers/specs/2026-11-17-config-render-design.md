@@ -1,7 +1,7 @@
 # `axis config`: rendered fleet config with drift checks
 
 Date: 2026-11-17; revised: 2026-11-19
-Status: draft v6 (addressing fifth §8 spec review findings; awaiting fresh re-review; no code until approved)
+Status: draft v7 (addressing sixth §8 spec review findings; awaiting fresh re-review; no code until approved)
 Owning area: `cmd/axis`, `internal/config`, `internal/facts`, `internal/daemon`, `internal/api`, `internal/discovery`, `internal/llmrouter`
 
 ## Problem
@@ -32,8 +32,8 @@ writing spec that one deferred, scoped to generated files rather than hand-edite
 - No config writes from `axis agent`, MCP, HTTP or execution surfaces.
 - No change to fact schemas, collector output, snapshot contract, or UDP discovery wire protocol in
   phase 1 (only exporting `facts.RemoteNodeIdentity` in `internal/facts` and adding a read-only
-  `GET /v2/beacons` route + `daemon.FetchBeacons` client exposing `d.beaconRegistry.Snapshot()` on
-  the existing daemon/API surface so `axis config` does not contend on `:42424` with `SO_REUSEPORT`).
+  `GET /v2/beacons` route + `daemon.FetchBeacons` client exposing `(d *Daemon).BeaconsStatus()`
+  without exposing `discovery.secret`, so `axis config` does not contend on `:42424` with `SO_REUSEPORT`).
 - No new secret indirection in phase 1. The loader does not require `discovery.secret`
   (`internal/config/config.go:581-588` only validates ports/intervals), but beacon authentication
   requires a non-empty value (`internal/discovery/udp.go:56-59,76-82`). Phase 1 therefore requires
@@ -153,11 +153,13 @@ backups are 0600.
 `allow_stable_ids` is the membership authority:
 
 - Every rendered node in `nodes.yaml` must be pre-declared in `~/.axis/roster.yaml` (or `--roster PATH`),
-  which owns `name` and `stable_id`, plus optional pinned `hostname` / `endpoints`. Unpinned
-  entries already declared in `roster.yaml` accept address refreshes from live discovery.
-  Precedence for `hostname`/`endpoints` is therefore: non-empty roster pin, then live discovery
-  matching `stable_id`; if neither provides `hostname` or `endpoints[].hostname`,
-  `Config.Validate` rejects the entry (`internal/config/config.go:552-554`).
+  which owns `name` and `stable_id`, plus optional pinned `hostname` / `endpoints`. A roster entry
+  is address-pinned whenever `hostname != "" || len(endpoints) > 0` (matching `config.go:404-407`:
+  `hostname` is authored-only and is never synthesized from `endpoints[]`, so an endpoints-only pin
+  keeps `hostname` empty even when live beacons arrive for its `stable_id`). Only entries with both
+  `hostname == ""` and empty `endpoints` accept address refreshes from live discovery; if an unpinned
+  entry receives neither a pin nor discovery addresses, `Config.Validate` rejects it
+  (`internal/config/config.go:552-554`).
 - Exact roster mismatch & validation rules:
   - Reject duplicate node `name` (case-insensitive) or duplicate `stable_id` inside `roster.yaml` /
     `--roster`.
@@ -169,20 +171,33 @@ backups are 0600.
   - During `axis config discover`, flag a mismatch warning/error if an SSH `facts.RemoteNodeIdentity`
     probe disagrees with `roster.yaml`'s declared `stable_id`.
 - Address updates and daemon coexistence (no `SO_REUSEPORT` split):
-  1. When `axis config discover`, `render`, `diff`, or `apply` needs live beacon observations, query
-     `daemon.FetchBeacons(ctx, addr)` (`GET /v2/beacons` backed by `(d *Daemon).Beacons()` returning
-     `d.beaconRegistry.Snapshot()`) first when the local daemon is reachable — **never** opening a
-     competing `:42424` `SO_REUSEPORT` UDP socket while `axis serve` holds `:42424`. Fall back to
-     a standalone `discovery.WatchBeaconChanges` scan **only** when the local daemon is unreachable
-     (single listener, avoiding `SO_REUSEPORT` datagram splitting).
-  2. Live beacons match by HMAC-authenticated `StableID` (`internal/discovery/udp.go:56-82`).
+  1. If `local.Discovery == nil || !local.Discovery.Enabled`, skip **all** beacon lookups (neither
+     `daemon.FetchBeacons` nor `discovery.WatchBeaconChanges`, matching `internal/discovery/udp.go:104`).
+  2. When `local.Discovery.Enabled` is true and `axis config discover`, `render`, `diff`, or `apply`
+     needs live beacon observations, query `daemon.FetchBeacons(ctx, addr)` (`GET /v2/beacons` backed
+     by `(d *Daemon).BeaconsStatus()` returning `{listening bool, udp_port int, beacons
+     []config.NodeConfig}`, with `udp_port` normalized via the `42424` default at
+     `internal/discovery/udp.go:250-253` and never exposing `discovery.secret`) first.
+  3. Fall back to a standalone `discovery.WatchBeaconChanges` scan whenever the local daemon is
+     unreachable, `!status.Listening`, or `effectiveUDPPort(status.UDPPort) !=
+     effectiveUDPPort(local.Discovery.UDPPort)` (since the daemon is not holding
+     `local.Discovery.UDPPort`, there is no `SO_REUSEPORT` datagram split).
+  4. When `status.Listening && effectiveUDPPort(status.UDPPort) ==
+     effectiveUDPPort(local.Discovery.UDPPort)`: compare `local.Discovery.Secret` against on-disk
+     `nodes.yaml`'s `discovery.secret` (the config `WatchDiscovery` loads in `daemon.go:475`). Never
+     open a competing socket on that same port and never silently trust beacons authenticated with a
+     different secret: if the secrets differ, emit an explicit drift warning in `discover`, and fail
+     with a named error if any unpinned `roster.yaml` node requires a live address during
+     `render`/`diff`/`apply` (`daemon holds discovery on port <p> with a different nodes.yaml secret;
+     pin addresses in roster.yaml or apply the secret change first`). Otherwise use `status.Beacons`.
+  5. Live beacons match by HMAC-authenticated `StableID` (`internal/discovery/udp.go:56-82`).
      Beacons whose `StableID` is in `allow_stable_ids` and in `roster.yaml` refresh unpinned
-     addresses; beacons whose `StableID` is in `allow_stable_ids` but **absent** from `roster.yaml`
+     entries; beacons whose `StableID` is in `allow_stable_ids` but **absent** from `roster.yaml`
      are surfaced by `axis config discover` as allowlisted pending peers (showing observed name,
      `stable_id`, and IP so the operator can add them to `roster.yaml` and supply `ssh_user` in
      `local.yaml`); `apply` does not silently invent `roster.yaml` entries or render nodes lacking
      `ssh_user`.
-  3. Pinned `roster.yaml` / `--roster` entries (including off-subnet or cross-site peers) can be
+  6. Pinned `roster.yaml` / `--roster` entries (including off-subnet or cross-site peers) can be
      optionally corroborated by `axis config discover` via `axis`'s existing `known_hosts`-verified
      SSH transport (`internal/transport/ssh.go`) and a narrow exported wrapper
      `facts.RemoteNodeIdentity(ctx context.Context, exec transport.Executor) *models.NodeIdentity`
@@ -190,10 +205,10 @@ backups are 0600.
      `detectRemoteNodeIdentity` at `internal/facts/identity.go:59-76`). No new SSH signing protocol
      and no change to `internal/discovery` or fact schemas/collector output are added.
 - A peer that beacons but is not allowlisted is reported by `discover` and excluded from renders.
-- `--roster PATH` is an authoring override input (for `render`, `diff`, `apply`), not a second
-  membership authority: every `stable_id` in the active roster (`~/.axis/roster.yaml` or `--roster`)
-  must also appear in `bootstrap.allow_stable_ids`, and `render`/`apply` refuse any unallowlisted
-  entry with a named error.
+- `--roster PATH` is an authoring override input (for `discover`, `render`, `diff`, `apply`), not a
+  second membership authority: every `stable_id` in the active roster (`~/.axis/roster.yaml` or
+  `--roster`) must also appear in `bootstrap.allow_stable_ids`, and `render`/`apply` refuse any
+  unallowlisted entry with a named error.
 
 Migration seeds a complete `~/.axis/roster.yaml` from the current `nodes.yaml`, including offline
 nodes and their `hostname`/`endpoints`, before the first render.
@@ -204,18 +219,22 @@ nodes and their `hostname`/`endpoints`, before the first render.
 `--scope ai` with `--migrate requires --scope all`) and bridges hand-maintained configs in six steps:
 
 1. **Pre-flight & intent-file safety checks (no backups or writes yet):** Reject explicit partial
-   `--scope`, inspect whether `~/.axis/nodes.yaml` (and `~/.axis/ai.yaml` when present) carry the
-   `# Code generated by axis config render.` header, and check whether any intent file
+   `--scope`, inspect whether `~/.axis/nodes.yaml` (and `~/.axis/ai.yaml` when present on disk)
+   begin with `# Code generated by axis config render.`, and check whether any intent file
    (`bootstrap.yaml`, `roster.yaml`, `local.yaml`) already exists on disk:
-   - If active generated file(s) already carry `# Code generated by axis config render.` AND all
-     required intent files already exist on disk: check whether re-rendering from those intent files
-     produces byte-identical generated file(s) (`Changed=false`). If byte-identical, return a clean
-     no-op (`Changed=false`, zero new `.bak-*` files); if drifted or hand-edited, **refuse `--migrate`**
-     with `"already migrated; run axis config apply without --migrate"` so `--migrate` never
-     overwrites edited `bootstrap.yaml`/`roster.yaml`/`local.yaml` from stale generated files.
-   - If active generated headers are absent on disk (legacy config) AND any intent file
-     (`bootstrap.yaml`, `roster.yaml`, or `local.yaml`) already exists on disk: **refuse `--migrate`**
-     before modifying anything (`intent file <path> already exists; move or remove it before --migrate`).
+   - **Branch 1 (already migrated):** If **every** active generated file on disk (`nodes.yaml`, plus
+     `ai.yaml` when present on disk) begins with `# Code generated by axis config render.` AND **all
+     three** intent files (`bootstrap.yaml`, `roster.yaml`, `local.yaml`) already exist on disk:
+     check whether re-rendering from those intent files matches on-disk generated file(s)
+     byte-for-byte (`Changed=false`). If byte-identical, return a clean idempotent no-op
+     (`Changed=false`, zero new `.bak-*` files); otherwise **refuse `--migrate`** with `"already
+     migrated; run axis config apply without --migrate"` so `--migrate` never overwrites edited
+     intent files from stale generated configs.
+   - **Branch 2 (unconditional `else` pre-existing-intent guard):** Whenever Branch 1 does **not**
+     handle the run (including legacy headerless configs, partial 1-of-3 / 2-of-3 intent files, and
+     mixed headered `nodes.yaml` + headerless `ai.yaml` states) AND **any** of `bootstrap.yaml`,
+     `roster.yaml`, or `local.yaml` already exists on disk: **refuse `--migrate`** before touching
+     anything (`intent file <path> already exists; move or remove it before --migrate`).
    - Load legacy `nodes.yaml` via `config.Parse` and optional `ai.yaml` via `LoadAIOrEmpty` (checking
      whether `ai.yaml` actually exists on disk). Reject missing/empty `discovery.secret` and any node
      missing `stable_id` (a `name` is not a stable identity).
@@ -223,21 +242,29 @@ nodes and their `hostname`/`endpoints`, before the first render.
    - Explicitly enforce `len(ai.Roles) > 0` before proceeding (an empty `roles: {}` validates under
      `LoadAI`/`ParseAI` and must be rejected explicitly by migration).
    - Identify an optional cluster hub backend in existing `ai.yaml`:
-     - (a) an entry literally named `hub` (case-insensitive): if `--hub-url` is also supplied and its
-       normalized URL (`strings.TrimRight(..., "/")`) differs from that backend's `base_url`, fail
-       with a named conflict error (`--hub-url conflicts with existing hub backend base_url`);
-     - (b) otherwise, an enabled (`b.IsEnabled()`), unbound (`node == ""`) `kind: openai-compatible`
-       backend referenced by any role whose `base_url` matches `--hub-url` (if supplied);
-     - (c) otherwise, the sole enabled (`b.IsEnabled()`), unbound (`node == ""` AND
-       `advertise_url == ""`) `kind: openai-compatible` backend referenced by roles (for example
-       `local-hub` in `ai.example.yaml:19-24`). If multiple eligible enabled unbound candidates exist
-       without `hub` or `--hub-url`, fail with a named ambiguity error listing candidate backend names.
+     - (a) an entry literally named `hub` (case-insensitive): require `kind == "openai-compatible"`,
+       `b.IsEnabled()`, `node == ""`, and `advertise_url == ""`, failing with a named migration error
+       if any precondition is violated (never silently enabling or stripping `node`/`advertise_url`/
+       `kind`). If `--hub-url` is also supplied and its normalized URL (`strings.TrimRight(..., "/")`)
+       differs from that backend's normalized `base_url`, fail with a named conflict error
+       (`--hub-url conflicts with existing hub backend base_url`);
+     - (b) otherwise, when `--hub-url != ""`: match an enabled (`b.IsEnabled()`), unbound
+       (`node == ""` AND `advertise_url == ""`) `kind: openai-compatible` backend referenced by any
+       role whose normalized `base_url` matches normalized `--hub-url`. If none matches AND one or
+       more eligible enabled unbound `openai-compatible` role-referenced backends exist in `ai.yaml`,
+       fail with a named mismatch error (`--hub-url does not match existing openai-compatible
+       backend(s): <names>`) rather than silently dropping `--hub-url` or emitting an unused
+       `hub_url`; if zero eligible candidates exist (for example an Ollama-only or node-bound
+       `ai.yaml`), seed `bootstrap.hub_url` from `--hub-url` and keep local backends intact;
+     - (c) otherwise (`--hub-url == ""` and no literal `hub`): match the sole enabled
+       (`b.IsEnabled()`), unbound (`node == ""` AND `advertise_url == ""`) `kind: openai-compatible`
+       backend referenced by roles (for example `local-hub` in `ai.example.yaml:19-24`). If two or
+       more eligible candidates exist, fail with a named ambiguity error listing their names; if zero
+       exist, migrate `ai.yaml` as a hubless local-only AI config (`bootstrap.hub_url` empty).
    - Disabled (`enabled: false`) or node-bound `openai-compatible` engines (where `!b.IsEnabled()` or
      `node != ""` or `advertise_url != ""`, such as a local per-node `llama.cpp`/`mlx`/`vLLM`
-     endpoint) are **never** promoted to `hub` by fallback 2(b)/(c); if no hub matches 2(a)–(c),
-     migrate `ai.yaml` as a hubless local-only AI config, keeping those backends in `local.yaml`
-     `ai.backends` with `node`, `advertise_url`, and `enabled` intact and leaving `bootstrap.hub_url`
-     empty unless `--hub-url` is supplied.
+     endpoint) are **never** promoted to `hub` by 2(b)/(c) and stay in `local.yaml` `ai.backends`
+     with `node`, `advertise_url`, and `enabled` intact.
    - If a hub backend is detected (or `--hub-url` is passed), seed `bootstrap.hub_url` from it; if a
      role literally references `hub` without any resolvable `hub_url`, fail with a named error.
    - When `ai.yaml` does **not** exist on disk (`os.IsNotExist`): preserve `nodes.yaml`-only state!
@@ -409,7 +436,7 @@ scoped file's header, schema (`config.Parse` / `config.ParseAI`), and digest (`r
 Add one command group, `axis config`, in `cmd/axis/config.go`:
 
 ```text
-axis config discover [--json]                                                   read-only: peers, allowlist state, SSH/beacon identity, drift
+axis config discover [--roster PATH] [--json]                                  read-only: peers, allowlist state, SSH/beacon identity, drift
 axis config render [--scope nodes|ai|all] [--roster PATH] [--out PATH]          print rendered config(s); --out DIR required for multi-file --scope all
 axis config diff [--scope nodes|ai|all] [--roster PATH] [--json]                live re-render compared with files on disk
 axis config verify [--scope nodes|ai|all]                                       offline schema/header/digest check
@@ -450,15 +477,20 @@ Rules:
 - `internal/facts` exports only the narrow helper `RemoteNodeIdentity(ctx, exec)` wrapping existing
   `detectRemoteNodeIdentity` (`internal/facts/identity.go:59-76`) with `uname -s` /
   `transport.WithBashForced` (no fact schema or snapshot contract changes).
-- `internal/daemon` adds `(d *Daemon) Beacons() []config.NodeConfig` (`d.beaconRegistry.Snapshot()`,
-  safe when `nil`) and `daemon.FetchBeacons(ctx, addr)` in `internal/daemon/client.go`; `internal/api`
-  registers read-only `GET /v2/beacons` under `withAuthSource` via an optional `beaconSource`
-  interface on `snapshotCache` (`internal/api/v2.go`) so existing mocks stay unchanged.
-- `cmd/axis/config.go` prefers `daemon.FetchBeacons` when the local daemon answers (avoiding any
-  `:42424` `SO_REUSEPORT` split), falls back to `discovery.WatchBeaconChanges` only when the daemon
-  is unreachable, composes optional SSH identity reads (`internal/transport` +
-  `facts.RemoteNodeIdentity`), validates secrets (`internal/secrets` `secrets.Resolve`), probes AI
-  backends (`internal/llmrouter` `ProbeBackendForNodes`), and calls `internal/config` pure helpers.
+- `internal/daemon` adds `(d *Daemon) BeaconsStatus() BeaconsStatus` (returning `{listening,
+  udp_port, beacons}` from `d.beaconRegistry.Snapshot()` and `WatchDiscovery`'s active listener
+  state, safe when `nil`, normalizing `udp_port` via `42424` default) and `daemon.FetchBeacons(ctx,
+  addr)` in `internal/daemon/client.go`; `internal/api` registers read-only `GET /v2/beacons` under
+  `withAuthSource` via an optional `beaconStatusSource` interface on `snapshotCache`
+  (`internal/api/v2.go`) so existing mocks stay unchanged.
+- `cmd/axis/config.go` skips all beacon lookups when `local.Discovery == nil ||
+  !local.Discovery.Enabled`, otherwise queries `daemon.FetchBeacons` first and falls back to
+  `discovery.WatchBeaconChanges` only when the daemon is unreachable, `!status.Listening`, or
+  listening on a different UDP port (enforcing the same-port `nodes.yaml` vs `local.yaml`
+  `discovery.secret` check without leaking secrets over HTTP), composes optional SSH identity reads
+  (`internal/transport` + `facts.RemoteNodeIdentity`), validates secrets (`internal/secrets`
+  `secrets.Resolve`), probes AI backends (`internal/llmrouter` `ProbeBackendForNodes`), and calls
+  `internal/config` pure helpers.
 - `internal/discovery` and `internal/llmrouter` remain unchanged consumers; zero imports from agent,
   MCP, or HTTP layers.
 - No new package is needed for phase 1. A new package would need an import-tier justification and
@@ -494,55 +526,66 @@ resolves at runtime.
   edit to post-`discovery` `agent` stays outside `roster_sha256`; legacy headerless file yields a
   named `verify` error.
 - `internal/config`: render is byte-deterministic (nodes, backends, roles sorted); strict decoders
-  reject unknown keys in `bootstrap.yaml`/`roster.yaml`/`local.yaml`, reject `hostname`/`endpoints`/
-  `stable_id` inside `local.yaml.nodes[]`, and reject any backend named `hub` (case-insensitive)
-  inside `local.yaml.ai.backends` even when no role references `hub`; `local.yaml` per-node overrides
-  (`ssh_user`, `role`, timeouts, `labels`) apply cleanly while duplicate `roster.yaml` `name`
-  (case-insensitive) or `stable_id` entries and `local.yaml.nodes` keys absent from `roster.yaml`
-  fail; missing `allow_stable_ids` or missing/empty `discovery.secret` fails; unallowlisted
-  `roster.yaml`/`--roster` entry fails; a beacon whose `b.Name` differs from `roster.yaml`'s
-  operator alias still matches by `stable_id` without failing `render`; generated `hub` omits
-  `auth: none` and preserves `ai.hub` `api_key_*`; `local.yaml` backends round-trip `advertise_url`,
-  `enabled`, `require_arch`; `probeURL` semantics handle `hub_url` with and without `/v1`
-  (`https://models.example.com/v1` queries `/v1/models`); exact model matching rejects `coder`
-  against catalog `coder:latest` while local-only roles (`prefer: [local-ollama]`) validate against
-  `local-ollama` models; disabled/dead backends are omitted and pruned from `prefer`, failing cleanly
-  if a role becomes empty.
+  reject unknown keys in `bootstrap.yaml`/`roster.yaml`/`local.yaml`, reject `name`/`hostname`/
+  `endpoints`/`stable_id` inside `local.yaml.nodes.<name>`, and reject any backend named `hub`
+  (case-insensitive) inside `local.yaml.ai.backends` even when no role references `hub`; `local.yaml`
+  per-node overrides (`ssh_user`, `role`, timeouts, `labels`) apply cleanly while duplicate
+  `roster.yaml` `name` (case-insensitive) or `stable_id` entries and `local.yaml.nodes` keys absent
+  from `roster.yaml` fail; an endpoints-only pinned node (`hostname == ""` with non-empty
+  `endpoints`) preserves `hostname == ""` across migration and render even when a live beacon
+  arrives for its `stable_id`; missing `allow_stable_ids` or missing/empty `discovery.secret` fails;
+  unallowlisted `roster.yaml`/`--roster` entry fails; a beacon whose `b.Name` differs from
+  `roster.yaml`'s operator alias still matches by `stable_id` without failing `render`; generated `hub`
+  omits `auth: none` and preserves `ai.hub` `api_key_*`; `local.yaml` backends round-trip
+  `advertise_url`, `enabled`, `require_arch`; `probeURL` semantics handle `hub_url` with and
+  without `/v1` (`https://models.example.com/v1` queries `/v1/models`); exact model matching rejects
+  `coder` against catalog `coder:latest` while local-only roles (`prefer: [local-ollama]`) validate
+  against `local-ollama` models; disabled/dead backends are omitted and pruned from `prefer`, failing
+  cleanly if a role becomes empty.
 - `internal/facts`: `RemoteNodeIdentity` forces non-login bash (`transport.WithBashForced`), detects
   remote OS via `uname -s`, and returns the Linux/Darwin stable ID via `detectRemoteNodeIdentity`
   without mutating fact schemas or full collector behavior.
 - `internal/api` & `internal/daemon`: `GET /v2/beacons` enforces `withAuthSource` and returns
-  `d.Beacons()` (`beaconRegistry.Snapshot()`), and `daemon.FetchBeacons` decodes it cleanly.
+  `d.BeaconsStatus()` (`listening`, normalized `udp_port`, `beacons` without `discovery.secret`), and
+  `daemon.FetchBeacons` decodes it cleanly.
 - `internal/config` & migration: migrating a `nodes.yaml`-only fixture with absent `ai.yaml` and all
   peers offline succeeds cleanly preserving `labels`, `endpoints`, `webhooks`,
   `allowed_internal_hosts`, `ssh_port`, timeouts, and `system_reserve_mb` in `roster.yaml`/`local.yaml`
-  without fabricating `ai.yaml`; a node lacking `stable_id` fails; migrating `ai.yaml` with `local-hub`,
-  `advertise_url`, `enabled: false`, and `require_arch` rewrites `prefer` cleanly to `hub`, while
-  multiple enabled unbound `openai-compatible` candidates without `--hub-url` fail with a named
-  ambiguity error; disabled (`enabled: false`) `openai-compatible` backends are excluded from fallback
-  hub auto-detection `2(b)/(c)`, and a `--hub-url` differing from an existing literal `hub` backend's
-  `base_url` fails with a conflict error; migrating an `ai.yaml` whose sole `openai-compatible`
-  backend is node-bound (`node: node-a`, `advertise_url: ...`) preserves it in `local.yaml`
-  `ai.backends` with `node`/`advertise_url` intact and leaves `bootstrap.hub_url` empty rather than
-  promoting it to `hub`; migrating an `ai.yaml` with `roles: {}` is rejected explicitly; a failing
-  migration validation/probe writes zero `.bak-*` files; an intent-file write error removes newly
-  written intent files before touching `nodes.yaml`/`ai.yaml`; re-running `--migrate` after editing
-  `local.yaml` (or running `--migrate` with legacy headerless `nodes.yaml` when any intent file
-  already exists on disk) refuses cleanly without overwriting intent files, whereas a clean second
-  `--migrate` run with unchanged output is an idempotent no-op (`Changed=false`).
-- `cmd/axis`: when a stub local daemon is reachable, `discover`/`render`/`diff`/`apply` read
-  `daemon.FetchBeacons` (`GET /v2/beacons`) without calling `discovery.WatchBeaconChanges` on
-  `:42424`, falling back to `WatchBeaconChanges` only when the daemon is unreachable; `discover`
-  reports SSH `RemoteNodeIdentity` vs `roster.yaml.stable_id` mismatches and surfaces allowlisted
-  beacon peers absent from `roster.yaml` as pending without `apply` fabricating nodes; `discover` and
-  `diff` leave live files byte-identical; `--scope ai` resolves `AdvertiseURL` node locality from
-  static intent files or on-disk `nodes.yaml` even when `roster.yaml`/`discovery.secret` are absent;
-  `render --scope ai` with hubless local-only roles succeeds while `render --scope ai` with no
-  `ai.roles` fails cleanly; `render --out` with a file path for `--scope all` fails cleanly and with a
-  directory writes both files; unresolvable `ai.hub` `api_key_env`/`api_key_file` fails cleanly before
-  write; `apply --migrate --scope nodes` is refused; `apply` without `--migrate` refuses a headerless
-  existing file; `apply` lists backups, prints the restart pointer when discovery/membership changes,
-  and refuses without `--yes` on non-TTY stdin; `apply --roster` refuses unallowlisted entries.
+  without fabricating `ai.yaml` (and round-tripping endpoints-only nodes with `hostname == ""`); a
+  node lacking `stable_id` fails; migrating `ai.yaml` with `local-hub`, `advertise_url`, `enabled:
+  false`, and `require_arch` rewrites `prefer` cleanly to `hub`, while multiple enabled unbound
+  `openai-compatible` candidates without `--hub-url` fail with a named ambiguity error; invalid
+  literal `hub` backends (disabled, non-`openai-compatible`, `node != ""`, or `advertise_url != ""`)
+  and `--hub-url` mismatches against eligible `local-hub` fail cleanly (whereas `--hub-url` with a
+  purely Ollama/node-bound `ai.yaml` seeds `bootstrap.hub_url`); disabled (`enabled: false`)
+  `openai-compatible` backends are excluded from fallback hub auto-detection `2(b)/(c)`, and a
+  `--hub-url` differing from an existing literal `hub` backend's `base_url` fails with a conflict
+  error; migrating an `ai.yaml` whose sole `openai-compatible` backend is node-bound (`node: node-a`,
+  `advertise_url: ...`) preserves it in `local.yaml` `ai.backends` with `node`/`advertise_url` intact
+  and leaves `bootstrap.hub_url` empty rather than promoting it to `hub`; migrating an `ai.yaml` with
+  `roles: {}` is rejected explicitly; a failing migration validation/probe writes zero `.bak-*` files;
+  an intent-file write error removes newly written intent files before touching `nodes.yaml`/`ai.yaml`;
+  re-running `--migrate` in drifted already-migrated state, partial-intent state (`nodes.yaml`
+  headered + 1–2 intent files), mixed-header state (`nodes.yaml` headered + headerless `ai.yaml`),
+  or legacy state with pre-existing intent files refuses cleanly without overwriting intent files,
+  whereas a clean second `--migrate` run with unchanged output is an idempotent no-op (`Changed=false`).
+- `cmd/axis`: `local.Discovery.Enabled == false` skips both `daemon.FetchBeacons` and
+  `WatchBeaconChanges`; when enabled and a stub daemon reports `listening: true` on the matching port
+  (with matching secret), `discover`/`render`/`diff`/`apply` read `FetchBeacons` without calling
+  `WatchBeaconChanges`; when the daemon is unreachable, reports `listening: false`, or listens on a
+  different `udp_port`, CLI falls back to standalone `WatchBeaconChanges`; same-port secret mismatch
+  against on-disk `nodes.yaml` warns in `discover` and fails unpinned `render`; `discover --roster`
+  honors alternate roster files, reports SSH `RemoteNodeIdentity` vs `roster.yaml.stable_id`
+  mismatches, and surfaces allowlisted beacon peers absent from `roster.yaml` as pending without
+  `apply` fabricating nodes; `discover` and `diff` leave live files byte-identical; `--scope ai`
+  resolves `AdvertiseURL` node locality from static intent files or on-disk `nodes.yaml` even when
+  `roster.yaml`/`discovery.secret` are absent; `render --scope ai` with hubless local-only roles
+  succeeds while `render --scope ai` with no `ai.roles` fails cleanly; `render --out` with a file path
+  for `--scope all` fails cleanly and with a directory writes both files; unresolvable `ai.hub`
+  `api_key_env`/`api_key_file` fails cleanly before write; `apply --migrate --scope nodes` is refused;
+  `apply` without `--migrate` refuses a headerless existing file; `apply` lists backups, prints the
+  restart pointer when discovery/membership changes, and refuses without `--yes` on non-TTY stdin;
+  `apply --roster` refuses unallowlisted entries.
 - `cmd/axis`: a HTTP 200 non-JSON/HTML `/models` response on `hub` (`OK: true, Models: nil`) aborts
   render with a hub-probe/parse error instead of falling through to "model absent"; an HTTP 200
   non-JSON response on a non-hub local backend omits it and prunes `prefer` (failing cleanly if empty);
