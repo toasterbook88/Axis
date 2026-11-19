@@ -616,3 +616,22 @@ Questions:
 - When `ai.yaml` is absent on disk (valid under `LoadAIOrEmpty`), should `axis doctor` stay silent on `ai.yaml` while `axis config verify` checks only `nodes.yaml` unless `--scope ai` or `ai.yaml` exists? Yes, `verify --scope all` checks only `nodes.yaml` and `doctor` stays silent on absent `ai.yaml` unless `local.yaml` defines `ai.roles`, while `--scope ai` fails on missing `ai.yaml`. verified: `### Verification` specifies this contract.
 
 Note: Original revise verdict against `85063ae0` retained honestly; re-review of `ee06d641` + this review record follows before any code starts.
+
+Kind: spec
+Reviewer: fresh-context subagent 6d0467c9-4154-4100-909d-56414b60d267
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: c3a188e2e7af941fde27b1ecac4a6dc8b4122cf5
+Date: 2026-11-19
+Verdict: revise
+
+1. Major: unexported `facts.detectRemoteNodeIdentity` could not be called from `cmd/axis` under the no-fact-plane-change non-goal. Spec now adds `internal/facts` to Owning area, narrows the non-goal to keep fact schemas/collector output unchanged, exports a narrow `facts.RemoteNodeIdentity(ctx, exec)` wrapper over `detectRemoteNodeIdentity` (`transport.WithBashForced` + `uname -s`), and adds a test. fixed in 2b5f03b30d84221343c1105c8ae32f85d972180b.
+2. Major: `ProbeBackendForNodes` returns `OK=true, Models=nil` on HTTP 2xx unparseable `/models` responses, defeating `!probe.OK`. Spec now treats `!probe.OK || probe.Models == nil` as failure (aborting render for `hub`, omitting/pruning for local backends, and distinguishing `nil` from empty JSON `[]`), with explicit 200 non-JSON `/models` tests. fixed in 2b5f03b30d84221343c1105c8ae32f85d972180b.
+3. Major: `bootstrap.hub_url` was required unconditionally for `--scope ai` despite local-only roles, and `ParseAI` alone allowed `roles: {}`. Spec requires `hub_url` only when `ai.roles` references `hub`, fails `--scope ai` cleanly when no `ai.roles` exist, keeps `ParseAI` identical to `LoadAI`, and enforces `len(roles) > 0` explicitly in migration and AI render checks. fixed in 2b5f03b30d84221343c1105c8ae32f85d972180b.
+4. Major: migration fallback rule 2(c) misclassified a sole node-bound `openai-compatible` backend (`node != ""` / `advertise_url != ""`) as cluster `hub` and dropped `node` and `advertise_url`. Spec restricts fallback 2(c) to unbound backends with empty `node` and `advertise_url` (and `node == ""` under 2(b)), preserving hubless node-bound local AI configs and adding a regression fixture. fixed in 2b5f03b30d84221343c1105c8ae32f85d972180b.
+
+Questions:
+- What happens when an allowlisted beacon peer (`stable_id` in `bootstrap.allow_stable_ids`) is absent from `roster.yaml`? `roster.yaml` must pre-declare every rendered node (beacons update addresses only for nodes already in `roster.yaml`, while allowlisted beacons absent from `roster.yaml` are surfaced by `discover` as pending peers for manual addition alongside `ssh_user`, never auto-invented on `apply`). verified: `### Roster source` and `## Tests` define this explicitly.
+- How does `apply --migrate` handle explicit `--scope nodes`/`--scope ai`, and how are intent-file write failures handled after modifying `nodes.yaml`/`ai.yaml`? `--migrate` rejects partial `--scope` (`--migrate requires --scope all`), writes `bootstrap.yaml`/`roster.yaml`/`local.yaml` atomically first with cleanup on failure before touching `nodes.yaml`/`ai.yaml`, and rolls back both generated and newly created intent files if later replacement fails. verified: `### Migration`, `### Commands`, and `## Tests` define and cover both rules.
+
+Note: Original revise verdict against `c3a188e2` retained honestly; final fresh-context re-review against `2b5f03b3` + this review record follows before any code starts.
