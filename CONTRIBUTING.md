@@ -45,8 +45,10 @@ AXIS release artifacts are built from `v*` tags by GitHub Actions and GoReleaser
 the tag workflow — that breaks repo-truth gates and leaves releases without assets.
 
 1. Update `internal/buildinfo/version.go` and `CHANGELOG.md`.
-2. Ensure generated facts in `docs/current-state.md` describe repo version relative
-   to the **previous** published tag as "ahead" (tag name only; no live timestamps).
+2. Regenerate the facts in `docs/current-state.md` with
+   `./hack/refresh-current-state.sh`. They name the source version only:
+   `hack/repo-truth-tests.sh` requires that they carry no release comparison and do
+   not change when a release publishes.
 3. Run local validation:
 
 ```bash
