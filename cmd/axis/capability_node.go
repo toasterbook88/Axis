@@ -176,7 +176,7 @@ func probeRunnerFor(ctx context.Context, node config.NodeConfig) (probeRunner, s
 		if host, err := os.Hostname(); err == nil && host != "" {
 			if nodes, err := capabilitySnapshotNodes(ctx); err == nil {
 				for _, n := range nodes {
-					if strings.EqualFold(n.Name, node.Name) && shortHostname(n.Hostname) == shortHostname(host) {
+					if strings.EqualFold(n.Name, node.Name) && models.IsLocalHost(n.Hostname) {
 						local = true
 					}
 				}
@@ -191,13 +191,11 @@ func probeRunnerFor(ctx context.Context, node config.NodeConfig) (probeRunner, s
 		"ssh to " + node.Name + ": uname, getconf or sysctl, /proc/meminfo, df, /proc/driver/nvidia"
 }
 
+// A bare name matches this machine's short hostname, and a qualified one only
+// its full hostname (models.IsLocalHost), so alpha.remote.example is not
+// this machine just because this machine is called alpha.
 func capabilityNodeIsLocal(node config.NodeConfig) bool {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		return false
-	}
-	host = shortHostname(host)
-	return host == shortHostname(node.Name) || host == shortHostname(node.Hostname)
+	return models.IsLocalHost(node.Name) || models.IsLocalHost(node.Hostname)
 }
 
 // capabilityTargets turns --node, --all-nodes and --except into the list of
@@ -241,7 +239,7 @@ func capabilityTargets(ctx context.Context, nodes []string, all bool, except []s
 // checkFactsHardwareNode compares Axis's published facts for a node with the
 // probe script run on it.
 func checkFactsHardwareNode(ctx context.Context, name string) capability.Observation {
-	obs := capability.Observation{Capability: "facts.hardware", Checker: factsHardwareChecker + " --node",
+	obs := capability.Observation{Capability: "facts.hardware", Checker: factsHardwareChecker + capability.NodeCheckerSuffix,
 		Outcome: capability.OutcomeInconclusive, Subject: nodeSubject(name)}
 	nf, err := capabilityNodeFacts(ctx, name)
 	if err != nil {
@@ -269,7 +267,7 @@ func checkFactsHardwareNode(ctx context.Context, name string) capability.Observa
 	return judgeHardware(obs, axis, r.Hardware)
 }
 
-const factsGPUChecker = "axis capability check facts.gpu"
+const factsGPUChecker = capability.CheckerFactsGPU
 
 // checkFactsGPU compares the GPUs Axis lists for a machine with what the NVIDIA
 // driver on it shows, and refuses any GPU entry that is an error message.
@@ -288,7 +286,7 @@ func checkFactsGPU(ctx context.Context, name string) capability.Observation {
 		obs.Subject = localSubject(ctx, nf.Hostname)
 		gpus = nf.Resources.GPUs
 	} else {
-		obs.Checker += " --node"
+		obs.Checker += capability.NodeCheckerSuffix
 		obs.Subject = nodeSubject(name)
 		nf, err := capabilityNodeFacts(ctx, name)
 		if err != nil {

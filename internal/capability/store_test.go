@@ -22,7 +22,7 @@ func newStore(t *testing.T) *Store {
 }
 
 func checked(outcome Outcome) Observation {
-	return Observation{Capability: "facts.hardware", Outcome: outcome, Checker: "test checker",
+	return Observation{Capability: "facts.hardware", Outcome: outcome, Checker: CheckerFactsHardware,
 		Evidence: Evidence{Kind: EvidenceLiveProbe, Ref: "uname(2)"}}
 }
 
@@ -304,11 +304,11 @@ func TestVerifyCatchesEditsAndTruncation(t *testing.T) {
 	expectProblem("an edited state", "the state says trusted")
 
 	lines := strings.SplitAfter(string(journalBytes), "\n")
-	edited := lines[0] + strings.Replace(lines[1], "test checker", "test checker!", 1) + lines[2]
+	edited := lines[0] + strings.Replace(lines[1], "uname(2)", "uname(3)", 1) + lines[2]
 	_ = os.WriteFile(journalPath, []byte(edited), 0o600)
 	expectProblem("an edited middle line", "entry 3 does not chain")
 
-	edited = lines[0] + lines[1] + strings.Replace(lines[2], "test checker", "test checker!", 1)
+	edited = lines[0] + lines[1] + strings.Replace(lines[2], "uname(2)", "uname(3)", 1)
 	_ = os.WriteFile(journalPath, []byte(edited), 0o600)
 	expectProblem("an edited last line", "journal position")
 

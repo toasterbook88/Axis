@@ -81,6 +81,9 @@ func (e JournalEntry) validate() error {
 		if obs.Counted != Counted(obs) {
 			return fmt.Errorf("counted %q does not follow from the observation (%q)", obs.Counted, Counted(obs))
 		}
+		if obs.Origin == OriginChecker && !KnownChecker(obs.Checker) {
+			return fmt.Errorf("checker %q is not one of Axis's checkers; a checker observation must name one", obs.Checker)
+		}
 	case EntryCeiling:
 		if e.Ceiling == nil || e.Observation != nil || e.Thresholds != nil || e.Resolve != nil {
 			return errors.New("a ceiling entry carries a ceiling change and nothing else")
