@@ -8,9 +8,10 @@ for a delegation brief before it spawns a child; GPU facts no longer read an
 ### Features
 
 * `axis capability` keeps an append-only, hash-chained record of how often
-  AXIS's facts prove true. Built-in checkers (`facts.hardware`, `facts.gpu`,
-  on this machine or with `--node` / `--all-nodes`) compare the published facts
-  with an independent probe. A level rises one step at a time, only on checker
+  AXIS's facts prove true. Built-in checkers (`facts.hardware`, `facts.gpu`)
+  compare what AXIS reports with an independent probe: the local fact collector
+  on this machine, or the published snapshot with `--node` / `--all-nodes`. A
+  level rises one step at a time, only on checker
   passes over a minimum span with no open failure on any machine, and any
   counted failure lowers it at once. `record`, `ceiling`, `resolve`, `verify`
   and `export` complete the command. The record is advisory: no AXIS surface

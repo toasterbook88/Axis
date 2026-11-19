@@ -39,12 +39,12 @@ told a model to spawn with only `prompt` now needs the brief.
 ### `axis model start` refuses while a GPU holds a resident model
 
 `axis model start` refuses a llama-server launch when the snapshot shows a
-resident model on any GPU of the target machine; the operation receipt
-records the disposition `gpu_occupied`. `--main-gpu` chooses where the main layers go but does not
-isolate a device, so a different `--main-gpu` no longer gets past the check.
-A resident model with no observed GPU index does not count as occupancy, and
-CPU models on distinct ports are still allowed. Stop the resident model first,
-or use `axis model evict`.
+resident model on any GPU of the target machine; the operation receipt records
+the disposition `gpu_occupied`. `--main-gpu` chooses where the main layers go
+but does not isolate a device, so a different `--main-gpu` no longer gets past
+the check. A resident model with no observed GPU index, such as a CPU-only
+model on its own port, does not establish GPU occupancy. Stop the resident
+model first, or use `axis model evict`.
 
 ### GPU facts never list an `nvidia-smi` failure message
 
@@ -68,13 +68,15 @@ establish that a listener answers, not that it speaks MCP.
 `axis capability` keeps a record of how often AXIS's own facts prove true. It
 lives under `~/.axis/capability/`: `journal.jsonl` is the hash-chained record,
 and `state.json` and `transitions.jsonl` are derived from it. `axis capability
-check facts.hardware` and `check facts.gpu` compare the published facts with an
-independent probe on this machine, on named machines with `--node`, or on every
-machine in the snapshot with `--all-nodes`; another machine is probed over
-AXIS's SSH. Promotion thresholds can be set per capability in
-`~/.axis/capabilities.yaml`, and `axis capability ceiling` sets the highest
-level a capability may reach (advisory by default). Nothing writes the record until a capability command runs, and no AXIS surface
-reads a level to allow or refuse an action.
+check facts.hardware` and `check facts.gpu` compare what AXIS reports with an
+independent probe. With no node flag, a check runs the AXIS fact collector on
+this machine and reads the hardware through system calls. With `--node` (named
+machines) or `--all-nodes` (every machine in the snapshot), it reads AXIS's
+published snapshot for each machine and probes that machine over AXIS's SSH.
+Promotion thresholds can be set per capability in `~/.axis/capabilities.yaml`,
+and `axis capability ceiling` sets the highest level a capability may reach
+(advisory by default). Nothing writes the record until a capability command
+runs, and no AXIS surface reads a level to allow or refuse an action.
 
 ### Also in this release
 
