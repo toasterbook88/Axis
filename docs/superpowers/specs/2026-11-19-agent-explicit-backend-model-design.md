@@ -1,7 +1,7 @@
 # `axis agent --model`: use a configured backend that serves the named model
 
 Date: 2026-11-19. Status: implemented on `fix/agent-explicit-backend-model`; spec review
-approve-with-changes, its findings resolved below.
+approve-with-changes and diff review approve-with-changes, all findings resolved below.
 The code was written on 2026-11-04 and 2026-11-05 on a branch that was never pushed, and was ported
 to current `main` on 2026-11-19. This spec was written after that code, which is out of order under
 AGENTS.md §8; the PR asks the maintainer to accept or reject that order.
@@ -171,3 +171,28 @@ Questions:
 - Do the live numbers hold (eleven models, six refused, 3 to 4.5 ms, 404 then 429)? Verified: on 2026-11-19, against the cluster this was built on, `axis ai route --model` resolved all eleven hub models to the hub; v0.26.0 `axis agent --model` refused six with the catalog error and accepted the five a role names; two `axis ai backends` runs reported the hub's `/v1/models` latency as 3.0 ms and 4.5 ms; two hub aliases answered chat with 404 and then 429 in runs of this branch.
 - Is writing this spec after the code acceptable under AGENTS.md §8? Open: only the maintainer can rule on it; the PR asks.
 - Do `gofmt` and `make lint` pass? Verified: `hack/ci-preflight.sh`, which runs both, passed at 9dd3bbab, and `gofmt -l cmd/` is empty at 41c39880.
+
+Kind: diff
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (a fresh session of the authoring model's family, as the review prompt asks for diff reviews)
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: be4509ae861c35390a0a2ba946e2088ffcea25f9
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Minor: no test covered the default `--provider auto` success path the Problem describes, and the conditions that let a disabled or cloud same-name entry through were not pinned. Fixed in 9e0eba9f: TestExplicitBackendModelInDefaultProviderMode (auto and empty provider, with a usable catalog entry for another model) and TestExplicitModelLooksPastADisabledEntryWithTheSameName; the first fails with `auto` and empty removed from the gate, the second with `!choice.Disabled` removed.
+
+2. Minor: `docs/current-state.md` said the lookup applies to requests absent from the model catalog, but a disabled or cloud entry with the same name does not stop it. Fixed in 9e0eba9f: the line and Design step 1 say so, including that base refused that case with `model "M" is not usable`.
+
+3. Minor: the explicit path checks local Ollama twice in auto mode, and the first check is outside the shared 3 s budget. Fixed in 9e0eba9f by stating it in Research, the second of the review's two suggested fixes: the extra check and the worst case (about 9 s against a local Ollama that accepts connections but never answers, against 3 s at base) are named. Sharing one check with the resolver would need a new parameter on `resolveReadyStartupModelTarget` and its callers for a case where the local service is already broken.
+
+4. Minor: an internal import sat in the standard-library group of `agent_explicit_model_regression_test.go`. Fixed in 9e0eba9f.
+
+Questions:
+
+- Is writing this spec after the code acceptable under AGENTS.md §8? Open: only the maintainer can rule on it; the PR asks.
+- Is `axis tui --model` meant to take this path? Verified: `cmd/axis/tui.go` starts through `runAgentConsoleStartup` and `consoleExplicitPrelude`, which sets `ExplicitModel` (TestConsolePreservesExplicitModelOrigin); the spec and `docs/current-state.md` now name it.
+- Do the Research link and the live numbers hold? Verified: see the spec review's questions above; the link was fetched and the live runs were made on 2026-11-19.
+- Does the proposed auto-mode test catch a gate without `auto`? Verified: TestExplicitBackendModelInDefaultProviderMode passes at 9e0eba9f and fails with the gate narrowed to `mode == "local"`.
+
+Note: one diff review is required, for about 130 changed non-test `.go` lines, all in `cmd/axis`.
