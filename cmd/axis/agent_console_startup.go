@@ -143,6 +143,7 @@ func consoleExplicitPrelude(ctx context.Context, in *agentStartupInputs, loader 
 	if strings.TrimSpace(in.model) != "" && strings.TrimSpace(in.role) != "" {
 		return fail(fmt.Errorf("use either --model or --role, not both"))
 	}
+	explicitModel := strings.TrimSpace(in.model) != ""
 	if strings.TrimSpace(in.model) == "" && strings.TrimSpace(in.role) != "" {
 		fromRole := modelFromAIRoleFn(in.role)
 		if fromRole == "" {
@@ -160,6 +161,7 @@ func consoleExplicitPrelude(ctx context.Context, in *agentStartupInputs, loader 
 	}
 	res, err := setup(agentStartupBackendParams{
 		Model:                 in.model,
+		ExplicitModel:         explicitModel,
 		StartupRequestedModel: requested,
 		Provider:              in.provider,
 		CloudModel:            in.cloudModel,
