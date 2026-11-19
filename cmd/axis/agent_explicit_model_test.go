@@ -154,7 +154,7 @@ func TestExplicitGatewayRetainsCredentialBinding(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("missing target: %+v", got)
 	}
-	opts, err := cloudOptsForTarget(nil, &got[0])
+	opts, err := cloudOptsForTarget(context.Background(), nil, &got[0])
 	if err != nil || opts.APIKey != "synthetic-key" {
 		t.Fatal("configured credential binding was not retained")
 	}
