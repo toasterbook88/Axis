@@ -4,7 +4,7 @@ Date: 2026-11-19. Status: implemented on `fix/agent-explicit-backend-model`; spe
 approve-with-changes and diff review approve-with-changes, all findings resolved below.
 The code was written on 2026-11-04 and 2026-11-05 on a branch that was never pushed, and was ported
 to current `main` on 2026-11-19. This spec was written after that code, which is out of order under
-AGENTS.md §8; the PR asks the maintainer to accept or reject that order.
+AGENTS.md §8; the maintainer accepted that order in writing on PR #666 on 2026-11-19.
 
 ## Problem
 
@@ -169,7 +169,7 @@ Questions:
 
 - Is the Ollama quote still at the linked page? Verified: the linked `docs/api.md` fetched on 2026-11-19 reads "The tag is optional and, if not provided, will default to latest."
 - Do the live numbers hold (eleven models, six refused, 3 to 4.5 ms, 404 then 429)? Verified: on 2026-11-19, against the cluster this was built on, `axis ai route --model` resolved all eleven hub models to the hub; v0.26.0 `axis agent --model` refused six with the catalog error and accepted the five a role names; two `axis ai backends` runs reported the hub's `/v1/models` latency as 3.0 ms and 4.5 ms; two hub aliases answered chat with 404 and then 429 in runs of this branch.
-- Is writing this spec after the code acceptable under AGENTS.md §8? Open: only the maintainer can rule on it; the PR asks.
+- Is writing this spec after the code acceptable under AGENTS.md §8? Verified: the maintainer accepted the order in writing on PR #666 on 2026-11-19.
 - Do `gofmt` and `make lint` pass? Verified: `hack/ci-preflight.sh`, which runs both, passed at 9dd3bbab, and `gofmt -l cmd/` is empty at 41c39880.
 
 Kind: diff
@@ -190,7 +190,7 @@ Verdict: approve-with-changes
 
 Questions:
 
-- Is writing this spec after the code acceptable under AGENTS.md §8? Open: only the maintainer can rule on it; the PR asks.
+- Is writing this spec after the code acceptable under AGENTS.md §8? Verified: the maintainer accepted the order in writing on PR #666 on 2026-11-19.
 - Is `axis tui --model` meant to take this path? Verified: `cmd/axis/tui.go` starts through `runAgentConsoleStartup` and `consoleExplicitPrelude`, which sets `ExplicitModel` (TestConsolePreservesExplicitModelOrigin); the spec and `docs/current-state.md` now name it.
 - Do the Research link and the live numbers hold? Verified: see the spec review's questions above; the link was fetched and the live runs were made on 2026-11-19.
 - Does the proposed auto-mode test catch a gate without `auto`? Verified: TestExplicitBackendModelInDefaultProviderMode passes at 9e0eba9f and fails with the gate narrowed to `mode == "local"`.
