@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 )
@@ -94,6 +96,20 @@ func TestResolveRole_UpstreamWithoutTheModelIsNotServing(t *testing.T) {
 	if len(dec.Upstreams) == 0 || !dec.Upstreams[0].Unlisted || dec.Upstreams[0].Model != "m" || dec.Upstreams[0].OK {
 		t.Fatalf("upstreams=%+v want the first check unlisted for model m", dec.Upstreams)
 	}
+	// axis ai route --format json|yaml and inference_route_explain show both fields.
+	// The decision has its own top-level model, so look inside upstreams only.
+	js, _ := json.Marshal(dec.Upstreams)
+	ys, _ := yaml.Marshal(dec.Upstreams)
+	for _, want := range []string{`"model":"m"`, `"unlisted":true`} {
+		if !strings.Contains(string(js), want) {
+			t.Fatalf("JSON lacks %s: %s", want, js)
+		}
+	}
+	for _, want := range []string{"model: m\n", "unlisted: true\n"} {
+		if !strings.Contains(string(ys), want) {
+			t.Fatalf("YAML lacks %q: %s", want, ys)
+		}
+	}
 
 	alone := hubConfig([]string{"hub"}, hubBackend("hub", hub))
 	_, err = resolveFast(t, alone, true)
@@ -171,6 +187,49 @@ func TestUpstreamServersThatAnswerUnlistedNames(t *testing.T) {
 	}
 }
 
+// The reasoning and the check name the model the hub forwards, not the alias,
+// and the strict skip names the upstream that answered without it.
+func TestResolveRole_ReasoningNamesTheForwardedModel(t *testing.T) {
+	dead := deadUpstream(t)
+	up, _ := listingUpstream(t, listing("other-model:latest"))
+	hub := namedHub(t, []string{"m"}, entry("m", "openai/served-m", dead, nil), entry("m", "openai/served-m", up, nil))
+	cfg := hubConfig([]string{"hub"}, hubBackend("hub", hub))
+	dec, err := resolveFast(t, cfg, true)
+	if !errors.Is(err, llmrouter.ErrModelUnlisted) || !strings.HasSuffix(err.Error(), "(listed, but no upstream serves it)") {
+		t.Fatalf("strict error = %v", err)
+	}
+	if !strings.Contains(strings.Join(dec.Reasoning, " "), `no upstream serves it (`+up+`: answered, but does not list "served-m")`) {
+		t.Fatalf("strict reasoning should name the unlisted upstream and the forwarded model: %v", dec.Reasoning)
+	}
+	if len(dec.Upstreams) != 2 || dec.Upstreams[1].Model != "served-m" || !dec.Upstreams[1].Unlisted || dec.Upstreams[0].Unlisted {
+		t.Fatalf("upstreams=%+v", dec.Upstreams)
+	}
+	dec, err = resolveFast(t, cfg, false)
+	if err != nil || dec.Confidence != 0.55 || !strings.Contains(strings.Join(dec.Reasoning, " "), `its upstream does not list "served-m"`) {
+		t.Fatalf("allow_unlisted: decision=%+v err=%v", dec, err)
+	}
+}
+
+// A repository-style forwarded name is checked, not dropped.
+func TestUpstreamRepositoryNameIsChecked(t *testing.T) {
+	up, _ := listingUpstream(t, listing("org/other-4bit"))
+	hub := namedHub(t, []string{"m"}, entry("m", "openai/org/m-4bit", up, nil))
+	dec, _ := resolveFast(t, hubConfig([]string{"hub"}, hubBackend("hub", hub)), true)
+	if len(dec.Upstreams) != 1 || dec.Upstreams[0].Model != "org/m-4bit" || !dec.Upstreams[0].Unlisted {
+		t.Fatalf("upstreams=%+v want org/m-4bit unlisted", dec.Upstreams)
+	}
+}
+
+// With no exact alias, the tag-insensitive fallback still finds the deployment.
+func TestResolveRole_TaggedRequestFallsBackToTheUntaggedAlias(t *testing.T) {
+	up, _ := listingUpstream(t, listing("other-model:latest"))
+	hub := namedHub(t, []string{"m"}, entry("m", "openai/m", up, nil))
+	dec, err := resolveModel(t, &config.AIConfig{Backends: []config.AIBackendConfig{hubBackend("hub", hub)}}, "m:latest", true)
+	if !errors.Is(err, llmrouter.ErrModelUnlisted) || len(dec.Upstreams) != 1 || !dec.Upstreams[0].Unlisted {
+		t.Fatalf("err=%v upstreams=%+v", err, dec.Upstreams)
+	}
+}
+
 // Case, the implicit :latest tag and repository-style names match.
 func TestUpstreamNameVariantsMatch(t *testing.T) {
 	for name, tc := range map[string]struct{ forwarded, listed string }{
@@ -186,6 +245,10 @@ func TestUpstreamNameVariantsMatch(t *testing.T) {
 			dec, err := resolveFast(t, hubConfig([]string{"hub"}, hubBackend("hub", hub)), true)
 			if err != nil || len(dec.Upstreams) != 1 || !dec.Upstreams[0].OK {
 				t.Fatalf("decision=%+v err=%v", dec, err)
+			}
+			// The match is a real check of the forwarded name, not a missing verdict.
+			if want := strings.TrimPrefix(tc.forwarded, "openai/"); dec.Upstreams[0].Model != want {
+				t.Fatalf("forwarded model %q, want %q", dec.Upstreams[0].Model, want)
 			}
 		})
 	}

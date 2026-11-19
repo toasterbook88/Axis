@@ -155,9 +155,12 @@ func TestResolveRole_StrictDeadUpstreamErrors(t *testing.T) {
 	cfg := hubConfig([]string{"hub"},
 		config.AIBackendConfig{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1"},
 	)
-	_, err := resolveFast(t, cfg, true)
-	if err == nil || !strings.Contains(err.Error(), "upstream") {
-		t.Fatalf("err=%v want an error naming the upstream", err)
+	dec, err := resolveFast(t, cfg, true)
+	if err == nil || !strings.HasSuffix(err.Error(), "(listed, but no upstream answers)") {
+		t.Fatalf("err=%v want an error naming the dead upstream", err)
+	}
+	if !strings.Contains(strings.Join(dec.Reasoning, " "), "listed, but no upstream answers (") {
+		t.Fatalf("reasoning should say no upstream answers: %v", dec.Reasoning)
 	}
 }
 

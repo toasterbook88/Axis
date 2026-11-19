@@ -36,7 +36,7 @@ lookup of `axis agent --model` (#666), which therefore picked a hub that could n
 
 ## Design
 
-1. `modelAPIBases` (`internal/llmrouter/upstream.go`) picks the `/model/info` entries whose
+1. `modelDeployments` (`internal/llmrouter/upstream.go`, replacing `modelAPIBases`) picks the `/model/info` entries whose
    `model_name` equals the requested model exactly, because LiteLLM routes on the exact name; only
    when there is none does it fall back to today's `ModelListed` match. For each entry it returns
    the `api_base` and the forwarded model, for the providers that name a server by `api_base`:
@@ -77,21 +77,29 @@ lookup of `axis agent --model` (#666), which therefore picked a hub that could n
    such hub's upstreams failed to answer (today's wording), ` (listed, but no upstream serves it)`
    when every such hub had an unlisted upstream, and ` (listed, but no upstream answers or serves
    it)` when both happened across hubs.
-6. `docs/current-state.md` and the decision record (a new §2.6, dated) describe the check, and the
-   `--allow-unlisted` help says it also accepts an upstream that does not list the model.
+6. `docs/current-state.md`, the decision record (a new §2.6, dated) and
+   `docs/runbooks/ai-config.md` describe the check, and the `--allow-unlisted` help says it also
+   accepts an upstream that does not list the model. `axis agent --model` (#666) has no such flag;
+   the runbook names its workaround for a server that serves a name it does not list: a role that
+   names the model, whose catalog entry resolves without a probe and is used first.
 
-Tests (`internal/llmrouter/upstream_test.go`), each with a local `httptest` hub and upstream:
+Tests (`internal/llmrouter/upstream_model_test.go`, and the dead-upstream wording in
+`upstream_test.go`), each with a local `httptest` hub and upstream:
 
 - an upstream listing other models makes the hub not healthy, falls through to the next preferred
   backend, and fails strict mode with "no upstream serves it";
 - with `allow_unlisted` the same hub is selected at confidence 0.55 with the "still selecting" note;
-- the check reports `model` and `unlisted` in the decision;
+- the check reports `model` and `unlisted` in the decision and in its JSON and YAML;
+- the strict reasoning names the unlisted upstream (not a dead one beside it) and the forwarded
+  model, and the `allow_unlisted` note names the forwarded model, for an alias that forwards a
+  different name;
 - a table over all six providers (as a prefix, and as `custom_llm_provider` with an unprefixed
   model) checks the forwarded name; an unknown provider gives no verdict;
 - a llama-server entry (`owned_by: llamacpp`), a TGI entry (`owned_by` equal to `id`) and a
   forwarded `tgi` each pass when the list does not name the forwarded model;
 - case and `:latest` variants pass (`openai/M` against `m:latest`), and a repository-style forwarded
-  name passes against the same `id`;
+  name passes against the same `id` and is reported unlisted against a list without it;
+- a tagged request with no exact alias falls back to the untagged alias's deployment;
 - an empty list and a body that does not parse both give "answered", as today;
 - two deployments of the alias on one `api_base`, the unlisted one first, pass, and that `api_base`
   is fetched once;
