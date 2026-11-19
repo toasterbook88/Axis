@@ -1,7 +1,7 @@
 # `axis ai route`: an upstream that does not list the forwarded model does not serve it
 
-Date: 2026-11-19. Status: proposed; spec review approve-with-changes, its findings resolved below.
-No code yet.
+Date: 2026-11-19. Status: implemented on `feat/route-upstream-model-check`; spec review
+approve-with-changes, its findings resolved below.
 
 ## Problem
 
@@ -42,9 +42,11 @@ lookup of `axis agent --model` (#666), which therefore picked a hub that could n
    the `api_base` and the forwarded model, for the providers that name a server by `api_base`:
    `openai`, `ollama`, `ollama_chat`, `hosted_vllm`, `lm_studio` and `llamafile`. When
    `litellm_params.model` starts with `<provider>/` for one of them, the forwarded model is the rest
-   (only the first segment is removed, so `openai/org/model` forwards `org/model`). When it has no
-   such prefix but `litellm_params.custom_llm_provider` is one of them, the whole model is
-   forwarded, as LiteLLM prepends the provider itself. Otherwise the entry forwards nothing.
+   (only the first segment is removed, so `openai/org/model` forwards `org/model`). When
+   `litellm_params.custom_llm_provider` is set it decides instead, as in LiteLLM, which prepends it
+   to a model that does not already start with it: one of the six forwards the model without a
+   leading `<provider>/`, and any other provider forwards nothing. Otherwise the entry forwards
+   nothing.
    Entries are distinct by (`api_base`, forwarded model).
 2. Each distinct `api_base` is fetched once, exactly as today; every forwarded model on it is checked
    against that one body, and each (`api_base`, forwarded model) gets its own `UpstreamCheck`.
@@ -136,7 +138,9 @@ Tests (`internal/llmrouter/upstream_test.go`), each with a local `httptest` hub 
   to an Ollama server that lists the forwarded name exactly, one to an MLX server that lists the
   repository-style name exactly, one to a server that lists the alias exactly, and one to a
   llama-server whose list names a GGUF file path. Under this design all seven pass, and the three
-  disabled aliases fail.
+  disabled aliases fail. The implementation, run against the same hub with `axis ai route --model`
+  for each of its eight aliases (the database-stored one included), reported all eight healthy at
+  confidence 0.95, each upstream check `answered` with its forwarded name derived.
 - Optimization: none needed. No request is added, since each `api_base` is still fetched once; the
   change parses a body the check already reads, bounded by the existing `maxProbeResponseBytes`.
 
