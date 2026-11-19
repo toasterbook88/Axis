@@ -542,4 +542,29 @@ Questions:
 - Are hand edits to local-owned sections detected? They are outside both digests; `diff` reports them and doctor does not. verified: the verification section says so.
 - Does `roster_sha256` collide with `MembershipFingerprint()`? The header digest is renamed `roster_sha256` so it cannot be confused with `Config.MembershipFingerprint()`. verified: the two names differ.
 
-Note: Third review is pending against commit 30d596c4. The delegated review was blocked by provider billing (Ollama 429; alternate Claude/Codex providers returned 402), so no verdict is recorded yet.
+Note: The earlier delegated third-review attempt against 30d596c4 failed on provider billing before returning a verdict; the completed third fresh-context spec review on the rebased main candidate (`85063ae0`) is recorded below.
+
+Kind: spec
+Reviewer: fresh-context subagent da2ef279-a243-4c97-8291-6fab8c292e74
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: 85063ae0545ea11cbdb965f8c7320192858b7f95
+Date: 2026-11-19
+Verdict: revise
+
+1. Major: `hub_url + /v1/models` breaks when `hub_url` already ends in `/v1`. Spec now normalizes OpenAI-compatible URLs through `llmrouter.ProbeBackendForNodes` / `probeURL` (trim `/`, append `/models` if ending in `/v1`, else `/v1/models`). fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+2. Major: generated `hub` backend specified `auth: none` and an undefined `local.yaml` auth key. Spec drops `auth: none`, defines `local.yaml` `ai.hub` (`{api_key_env?, api_key_file?}`), and validates hub credentials in `cmd/axis/config.go` via `secrets.Resolve`. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+3. Major: persisted roster file path and `--roster` / `--hub-url` CLI flags were omitted. Spec adds `~/.axis/roster.yaml` (`0600`) with `endpoints`, includes it in `AGENTS.md §6`, and documents `--roster` and `--hub-url` in Commands. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+4. Major: roster onboarding relied on a nonexistent "signed SSH descriptor". Spec replaces it with authenticated UDP discovery beacons plus `roster.yaml`/`--roster` pins optionally corroborated by `known_hosts` SSH + `detectRemoteNodeIdentity`. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+5. Major: `local.yaml` AI inventory omitted `advertise_url` and `enabled`, and `ai.roles` omitted `require_arch`. Spec adds those fields and specifies probing through `ProbeBackendForNodes`. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+6. Major: migration failed without pre-existing `ai.yaml`, and hub-only catalog matching rejected local-only roles. Spec preserves `nodes.yaml`-only migration when `ai.yaml` is absent, specifies `local-hub`-to-`hub` migration rules with ambiguity errors, and validates local-only roles against their healthy preferred backends. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+7. Major: combined dual-digest header conflicted with per-file `--scope` renders and no-churn `discovery.secret` backups. Spec splits headers per file (`nodes.yaml` carries `# roster_sha256`, `ai.yaml` carries `# model_sha256`). fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+8. Minor: `WriteGenerated` no-op check, `apply` byte validation/rollback, and `--migrate` backup timing diverged from existing helpers. Spec adds `config.ParseAI`, uses raw `bytes.Equal` in `WriteGenerated`, probes/validates before creating `--migrate` backups, and deletes newly created first files on rollback when `BackupPath == ""`. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+9. Minor: claim that local-owned sections sit outside both digests conflicted with `roster_sha256` and `model_sha256` boundaries. Spec clarifies only post-`discovery` top-level `nodes.yaml` sections sit outside `roster_sha256`. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+10. Minor: Commands table and `## Tests` omitted `--scope` defaults/stdout format and required refusal/idempotency tests. Spec defines `--scope` defaults (`all`), multi-document stdout format, and adds every missing test and failing check. fixed in ee06d641a41365364e3667176e751d18c33e33ff.
+
+Questions:
+- May `local.yaml` override `nodes[].hostname` and `nodes[].endpoints`, or are those fields owned exclusively by discovery and roster pins? `roster.yaml` pins and live discovery are the sole owners; strict `local.yaml` schema decoding rejects `hostname` and `endpoints` inside `local.yaml.nodes[]`. verified: field ownership table and strict schema align without contradiction.
+- When `ai.yaml` is absent on disk (valid under `LoadAIOrEmpty`), should `axis doctor` stay silent on `ai.yaml` while `axis config verify` checks only `nodes.yaml` unless `--scope ai` or `ai.yaml` exists? Yes, `verify --scope all` checks only `nodes.yaml` and `doctor` stays silent on absent `ai.yaml` unless `local.yaml` defines `ai.roles`, while `--scope ai` fails on missing `ai.yaml`. verified: `### Verification` specifies this contract.
+
+Note: Original revise verdict against `85063ae0` retained honestly; re-review of `ee06d641` + this review record follows before any code starts.
