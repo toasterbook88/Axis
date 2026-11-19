@@ -695,3 +695,21 @@ Questions:
 - How does `apply --migrate` handle explicit `--scope nodes`/`--scope ai`, and how are intent-file write failures handled after modifying `nodes.yaml`/`ai.yaml`? `--migrate` rejects partial `--scope` (`--migrate requires --scope all`), writes `bootstrap.yaml`/`roster.yaml`/`local.yaml` atomically first with cleanup on failure before touching `nodes.yaml`/`ai.yaml`, and rolls back both generated and newly created intent files if later replacement fails. verified: `### Migration`, `### Commands`, and `## Tests` define and cover both rules.
 
 Note: Original revise verdict against `c3a188e2` retained honestly; final fresh-context re-review against `2b5f03b3` + this review record follows before any code starts.
+
+Kind: spec
+Reviewer: fresh-context subagent b122fe31-8a66-498b-ac7e-aba29d40adb4
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: f0cef23e355ae076309fdc77c9fd27663ffc2017
+Date: 2026-11-19
+Verdict: revise
+
+1. Major: `--migrate` could overwrite existing or edited intent files (`bootstrap.yaml`, `roster.yaml`, `local.yaml`) without backups when Step 1's no-op check returned false. Migration Step 1 now checks intent-file existence explicitly and refuses `--migrate` whenever generated headers + intent files drifted or any intent file already exists beside a legacy config, with regression tests added. fixed in 660413e98ec2094eba1da78dc6f61b463065d6e8.
+2. Major: unpinned roster address resolution via `WatchBeaconChanges` hits `SO_REUSEPORT` UDP datagram splitting when `axis serve` holds `:42424` (`s1=10 s2=0` verified). Spec now adds `(d *Daemon).Beacons()`, read-only `GET /v2/beacons` under `withAuthSource`, and `daemon.FetchBeacons`, reading the daemon's `BeaconRegistry` when reachable and falling back to standalone `WatchBeaconChanges` only when unreachable, with tests added. fixed in 660413e98ec2094eba1da78dc6f61b463065d6e8.
+3. Minor: `"roster name/stable_id mismatches fail"` had no defined comparison in Design. Roster source and Tests now explicitly reject duplicate `roster.yaml` names (case-insensitive) or `stable_id`s and unknown `local.yaml.nodes` keys, flag SSH `RemoteNodeIdentity` mismatches in `discover`, and preserve operator aliases when `beacon.Name != roster.Name`. fixed in 660413e98ec2094eba1da78dc6f61b463065d6e8.
+4. Minor: source of `renderedNodes` under decoupled `--scope ai` was unspecified. AI source and Tests now define offline resolution order (static intent files without UDP scans -> on-disk `nodes.yaml` via `config.Load` -> `nil`), preserving `AdvertiseURL` locality. fixed in 660413e98ec2094eba1da78dc6f61b463065d6e8.
+
+Questions:
+- Should `local.yaml` reject any backend named `hub` (case-insensitive) even without role references, exclude disabled (`enabled: false`) `openai-compatible` backends from fallback 2(b)/(c), and reject `--hub-url` conflicts against a literal `hub` backend in 2(a)? Yes, strict validation rejects `hub` in `local.yaml.ai.backends` unconditionally, disabled backends are excluded from fallback 2(b)/(c), and normalized URL mismatches between `--hub-url` and literal `hub` fail with a conflict error. verified: Field ownership, Migration Step 2, and Tests define and cover all three rules.
+
+Note: Original revise verdict against `f0cef23e` retained honestly; fresh-context re-review against `660413e9` + this review record follows before any code starts.
