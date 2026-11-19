@@ -1,7 +1,7 @@
 # `axis config`: rendered fleet config with drift checks
 
 Date: 2026-11-17; revised: 2026-11-19
-Status: draft v7 (addressing sixth §8 spec review findings; awaiting fresh re-review; no code until approved)
+Status: approved (ready for implementation)
 Owning area: `cmd/axis`, `internal/config`, `internal/facts`, `internal/daemon`, `internal/api`, `internal/discovery`, `internal/llmrouter`
 
 ## Problem
@@ -774,3 +774,17 @@ Questions:
 - Should any non-empty address pin (`hostname != "" || len(endpoints) > 0`) on an endpoints-only `roster.yaml` entry suppress filling `hostname` from live beacons? Yes, `hostname != "" || len(endpoints) > 0` counts as a complete pin (`hostname` remains authored-only per `internal/config/config.go:404-407`), with an endpoints-only migration/render round-trip test added. verified: Roster source and Tests define this explicitly.
 
 Note: Original revise verdict against `d790caab` retained honestly; fresh-context re-review against `1c1138f6` + this review record follows before any code starts.
+
+Kind: spec
+Reviewer: fresh-context subagent b1f33cca-d7c4-47b7-af3b-45862442dabe
+Model: gemini
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: d4f21585e440b80c187915453ed7b36652aa96a1
+Date: 2026-11-19
+Verdict: approve
+
+Questions:
+- Should `axis config apply --migrate` explicitly reject `--roster PATH` just as it rejects explicit `--scope nodes`/`--scope ai`, since `--migrate` seeds `~/.axis/roster.yaml` from existing `nodes.yaml`? open: flagged for explicit handling and test coverage during Phase 1 implementation PR.
+- If `status.Listening` is true on the matching UDP port while on-disk `~/.axis/nodes.yaml` is missing or unreadable (preventing `discovery.secret` comparison), should `discover` warn and unpinned `render`/`diff`/`apply` fail closed with the secret-mismatch error rather than opening a competing socket? open: flagged for stub-daemon / deleted-`nodes.yaml` race test during Phase 1 implementation PR.
+
+Note: Approved with zero findings after verifying all 34 code line citations, field ownership, import-tier/lifecycle boundaries, and repo gates. Both open questions stay visible for Phase 1 implementation testing and diff review.
