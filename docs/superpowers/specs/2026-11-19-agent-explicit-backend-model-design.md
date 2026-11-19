@@ -136,7 +136,7 @@ behavior they cover is removed.
   `ollamaHasModelFn`, with its own 3 s timeout, and in auto mode the resolver repeats it when the
   lookup adds nothing. Against a local Ollama that accepts connections but never answers, an
   explicit `--model` can therefore spend up to about 9 s in these checks before refusing, where
-  base spent up to 3 s; against a local Ollama that is down or answering they take milliseconds. An on-box hub answered
+  base spent up to 3 s; against a local Ollama that is down or answering they take milliseconds. A hub on the same machine answered
   `/v1/models` in about 3 to 4.5 ms in `axis ai backends` runs, so the budget is not the limit in
   the common case; a slow remote backend can exhaust it, and then startup fails closed as before.
 - A listing proves less than serving: two of a hub's listed aliases answered chat with 404 and then
