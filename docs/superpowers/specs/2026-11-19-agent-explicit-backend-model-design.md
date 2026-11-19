@@ -134,3 +134,30 @@ behavior they cover is removed.
   `checkModelReadiness` already warns that the model is not answering, and the chat error is shown.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (same family as the author, so a fresh top-tier session rather than a cross-family review)
+Base: b55931b81192ec3d4d39541dfb498257ca12864a
+Head: 6bc1459737c694e70b8c183fa3fb85461dca88fe
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Major: an explicit `--model` skipped a copy already on this machine's Ollama when the snapshot catalog was stale, because the appended backend entry matched before auto mode's on-disk check; the Problem section also misstated the base behavior (base accepts an on-disk model, and `--provider local` never refuses). Fixed in 41c39880: `appendExplicitAIModelChoice` returns the catalog unchanged when `ollamaHasModelFn` has the model (Design step 3); the Problem section and `docs/current-state.md` now describe both modes; TestExplicitModelOnLocalOllamaKeepsTheLocalCopy covers auto and local and fails with the check removed.
+
+2. Minor: no test pinned the entry's security class or the `--provider cloud` guard. Fixed in 41c39880: TestExplicitGatewayProvesTheViewerEndpoint asserts remote for an advertised URL and local for loopback, and TestExplicitModelWithCloudProviderProbesNoBackend asserts that `--provider cloud` without `--cloud-model` probes no backend; each fails when its behavior is forced the other way.
+
+3. Minor: the disagreement with `axis ai route --model` remains for tagged listings, and no non-goal said so. Fixed in 41c39880: a non-goal states that the agent accepts only the exact ID (plus `M:latest` for an untagged Ollama name) while the router treats tags as the same listing. The suggested change to name a tag-only listing in the refusal message is declined: that message is existing behavior shared by every catalog miss and is outside this spec; `go test ./cmd/axis -run TestExplicitGatewaySkipsEmptyAndTaggedOnlyBackends` passes, pinning that a tag-only backend is skipped as the non-goal says.
+
+4. Minor: the entry's fields did not match role entries as the spec claimed: it kept the backend's node name for this machine and set `Listed`. Fixed in 41c39880: the entry runs through `localizeChoiceNodes` and sets no `Listed`; Design step 6 names both; TestExplicitBackendChoiceOnThisNodeHasNoNodeName covers it and fails with the localization removed.
+
+5. Minor: plain-REPL completion offered `/model M`, which `/model` then refused. Fixed in 41c39880: `agentStartupBackendResult.Choices` stays the catalog without the startup-only entry; TestExplicitGatewayModelWithoutRoleReachesStartup asserts it and fails when `Choices` includes the entry.
+
+6. Minor: the CLI variant of the role regression test generated against the real local Ollama and could start `ollama serve`. Fixed in 41c39880: `agentCmd` calls the setup through `agentStartupBackendFn`; the test runs the real setup, then stops before generation, and asserts that `--role` reaches setup with `ExplicitModel` false; it fails when `agentCmd` passes true.
+
+Questions:
+
+- Is the Ollama quote still at the linked page? Verified: the linked `docs/api.md` fetched on 2026-11-19 reads "The tag is optional and, if not provided, will default to latest."
+- Do the live numbers hold (eleven models, six refused, 3 to 4.5 ms, 404 then 429)? Verified: on 2026-11-19, against the cluster this was built on, `axis ai route --model` resolved all eleven hub models to the hub; v0.26.0 `axis agent --model` refused six with the catalog error and accepted the five a role names; two `axis ai backends` runs reported the hub's `/v1/models` latency as 3.0 ms and 4.5 ms; two hub aliases answered chat with 404 and then 429 in runs of this branch.
+- Is writing this spec after the code acceptable under AGENTS.md §8? Open: only the maintainer can rule on it; the PR asks.
+- Do `gofmt` and `make lint` pass? Verified: `hack/ci-preflight.sh`, which runs both, passed at 9dd3bbab, and `gofmt -l cmd/` is empty at 41c39880.
