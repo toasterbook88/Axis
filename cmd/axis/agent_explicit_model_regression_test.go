@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/toasterbook88/axis/internal/runtimectx"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 func TestExplicitOllamaV1EndpointCanChat(t *testing.T) {

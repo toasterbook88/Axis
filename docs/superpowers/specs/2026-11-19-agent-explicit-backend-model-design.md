@@ -46,7 +46,8 @@ workaround is a role per model in `ai.yaml`.
 
 `setupAgentStartupBackend` (`cmd/axis/agent_startup_model.go`) gains one input,
 `ExplicitModel`, true only when the operator typed `--model` (set before `--role` fills the model,
-in both `agentCmd` and the console prelude `consoleExplicitPrelude`). When all of these hold:
+in both `agentCmd` and the console prelude `consoleExplicitPrelude`, which `axis tui --model` also
+uses). When all of these hold:
 
 - `ExplicitModel` is true and the model is non-empty;
 - no explicit target was already resolved (`explicitTarget == nil`);
@@ -56,7 +57,10 @@ startup calls `appendExplicitAIModelChoice` (`cmd/axis/agent_explicit_model.go`)
 `resolveReadyStartupModelTarget`. That function:
 
 1. Returns the catalog unchanged when an enabled local catalog entry already has the model
-   (case-insensitive), so existing entries keep their identity.
+   (case-insensitive), so existing entries keep their identity. A disabled entry (a role whose
+   backend is unreachable or does not serve the model) or a cloud entry with the same name does not
+   stop the lookup: where base refused with `model "M" is not usable: <reason>`, the first backend
+   that positively lists M is used.
 2. Loads `ai.yaml`. With no file, no backends, a load error or a cancelled context it returns the
    catalog unchanged.
 3. Returns the catalog unchanged when this machine's Ollama has the model on disk
@@ -93,7 +97,9 @@ behavior. `agentCmd` calls the setup through `agentStartupBackendFn`, a test sea
 can stop after startup without generating.
 
 Tests (`cmd/axis/agent_explicit_model_test.go`, `agent_explicit_model_regression_test.go`) cover:
-a backend-only model reaching startup, and staying out of the switchable choices; a copy on local
+a backend-only model reaching startup in local mode and in the default provider mode (auto and
+empty) with a usable catalog entry for another model, and staying out of the switchable choices; a
+disabled catalog entry with the same name not stopping the lookup; a copy on local
 Ollama winning with no backend probed (auto and local); empty, tag-only, disabled and unsupported
 backends skipped; each kind of unproven or mismatched router decision refused; the viewer-selected
 endpoint proved, with the security class it implies (remote for an advertised URL, local for
@@ -126,7 +132,11 @@ behavior they cover is removed.
   tag "is optional and, if not provided, will default to latest", which is why an untagged request
   matches `M:latest` on Ollama only.
 - Optimization: none beyond bounding the probe. The walk stops at the first accepting backend and
-  shares the existing 3 s hint budget rather than adding a timeout. An on-box hub answered
+  shares the existing 3 s hint budget rather than adding a timeout. The on-disk check of step 3 is
+  `ollamaHasModelFn`, with its own 3 s timeout, and in auto mode the resolver repeats it when the
+  lookup adds nothing. Against a local Ollama that accepts connections but never answers, an
+  explicit `--model` can therefore spend up to about 9 s in these checks before refusing, where
+  base spent up to 3 s; against a local Ollama that is down or answering they take milliseconds. An on-box hub answered
   `/v1/models` in about 3 to 4.5 ms in `axis ai backends` runs, so the budget is not the limit in
   the common case; a slow remote backend can exhaust it, and then startup fails closed as before.
 - A listing proves less than serving: two of a hub's listed aliases answered chat with 404 and then

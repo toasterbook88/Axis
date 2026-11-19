@@ -69,6 +69,52 @@ func TestExplicitModelOnLocalOllamaKeepsTheLocalCopy(t *testing.T) {
 	}
 }
 
+// stubRoleCatalog makes ai.yaml role entries usable or unreachable per base URL
+// without touching the network.
+func stubRoleCatalog(t *testing.T, reachable func(url string) bool, served []string) {
+	t.Helper()
+	prevProbe, prevList := inferenceProbeFn, inferenceListModelsFn
+	t.Cleanup(func() { inferenceProbeFn, inferenceListModelsFn = prevProbe, prevList })
+	inferenceProbeFn = reachable
+	inferenceListModelsFn = func(context.Context, config.AIBackendConfig, *config.Config) ([]string, bool) { return served, true }
+}
+
+// The default provider: with a usable catalog entry for another model, base
+// refused an explicit backend-only model; now it reaches the backend.
+func TestExplicitBackendModelInDefaultProviderMode(t *testing.T) {
+	for _, provider := range []string{"auto", ""} {
+		t.Run("provider="+provider, func(t *testing.T) {
+			_, cfg := explicitModelConfig(t, []config.AIBackendConfig{{Name: "gateway", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://gateway.example/v1"}},
+				map[string]string{"https://gateway.example/v1/models": `{"data":[{"id":"role-model"},{"id":"review-model"}]}`})
+			cfg.Roles = map[string]config.AIRoleConfig{"chat": {Model: "role-model"}}
+			stubRoleCatalog(t, func(string) bool { return true }, []string{"role-model", "review-model"})
+			stubStartupReady(t, nil)
+			got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
+				Provider: provider, RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
+			if err != nil || got.ActiveTarget.ID != "ai-model:gateway:review-model" {
+				t.Fatalf("default provider did not reach the backend: target=%+v err=%v", got.ActiveTarget, err)
+			}
+		})
+	}
+}
+
+// A disabled catalog entry with the requested name does not stop the lookup:
+// the first backend that positively lists the model is used.
+func TestExplicitModelLooksPastADisabledEntryWithTheSameName(t *testing.T) {
+	_, cfg := explicitModelConfig(t, []config.AIBackendConfig{
+		{Name: "dead", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://dead.example/v1"},
+		{Name: "gateway", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://gateway.example/v1"},
+	}, map[string]string{"https://gateway.example/v1/models": `{"data":[{"id":"review-model"}]}`})
+	cfg.Roles = map[string]config.AIRoleConfig{"review": {Model: "review-model", Prefer: []string{"dead"}}}
+	stubRoleCatalog(t, func(url string) bool { return !strings.Contains(url, "dead.example") }, []string{"review-model"})
+	stubStartupReady(t, nil)
+	got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
+		Provider: "auto", RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
+	if err != nil || got.ActiveTarget.ID != "ai-model:gateway:review-model" {
+		t.Fatalf("disabled same-name entry stopped the lookup: target=%+v err=%v", got.ActiveTarget, err)
+	}
+}
+
 // --provider cloud without --cloud-model must not look at ai.yaml backends.
 func TestExplicitModelWithCloudProviderProbesNoBackend(t *testing.T) {
 	seen, _ := explicitModelConfig(t, []config.AIBackendConfig{{Name: "gateway", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://gateway.example/v1"}},
