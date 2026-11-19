@@ -1,7 +1,7 @@
 # `axis ai route`: an upstream that does not list the forwarded model does not serve it
 
 Date: 2026-11-19. Status: implemented on `feat/route-upstream-model-check`; spec review
-approve-with-changes, its findings resolved below.
+approve-with-changes and two diff reviews approve-with-changes, all findings resolved below.
 
 ## Problem
 
@@ -177,3 +177,44 @@ Questions:
 - Do other servers reached through these providers answer names they do not list? Open: llamafile, `mlx_lm.server` and proxies such as llama-swap were not probed, since none runs where this was written; `--allow-unlisted` keeps such a route selectable if one does. For TGI the source settled it: `router/src/server.rs` lists one entry with `owned_by` equal to its model ID and serves the name `tgi`, so Design step 3 exempts both signs and the test list covers them.
 - With one hub skipped as unlisted and another as dead, which strict-mode suffix applies? Verified: Design step 5 now defines all three suffixes, and the test list includes a dead hub plus an unlisted hub.
 - How was "all seven pass" produced, and why seven when eight aliases remain? Verified: the lists were read by hand against the rules, which Research now says, with the implementation to be run against the same hub before merge; the eighth alias is stored in the hub's database, not its config file, and was not measured.
+
+Kind: diff
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (a fresh session of the authoring model's family)
+Base: e22d51a5a4a737467206ba069fc4af96900c8b84
+Head: a8b91614ae7b52dfbe3515eb0e91c47e775002c0
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Minor: nine of the reviewer's mutants survived: the dead-upstream suffix and skip wording, repository-style prefix stripping (`LastIndex`), the `model` and `unlisted` JSON tags, the alias named where the forwarded model belongs (allow note and check message), the skip line naming `checks[0]` instead of the unlisted check, and the removed tag-insensitive fallback. Fixed in 68c722d4: TestResolveRole_StrictDeadUpstreamErrors pins the "no upstream answers" suffix and reasoning; TestResolveRole_ReasoningNamesTheForwardedModel (alias `m` forwarding `served-m`, a dead and an unlisted upstream) pins the forwarded name in all three texts and the unlisted upstream in the skip line; TestUpstreamRepositoryNameIsChecked and the forwarded-name assertion in TestUpstreamNameVariantsMatch pin repository names; TestResolveRole_UpstreamWithoutTheModelIsNotServing checks both fields in the JSON and YAML of `upstreams`; TestResolveRole_TaggedRequestFallsBackToTheUntaggedAlias pins the fallback. All nine mutants now fail.
+
+2. Minor: the spec's escape for servers that serve names they do not list, `--allow-unlisted`, does not reach `axis agent --model`, whose lookup is always strict. Fixed in 68c722d4: Design step 6, decision record §2.6 and `docs/runbooks/ai-config.md` say so and name the workaround: a role that names the model, whose catalog entry resolves with `SkipProbe` (`cmd/axis/inference_hint.go`) and is used before the lookup runs (`cmd/axis/agent_explicit_model.go`).
+
+3. Minor: `docs/runbooks/ai-config.md` still said the route skips a hub only when its server does not answer. Fixed in 68c722d4: it describes the name check, items 5 and 6, and `--allow-unlisted`; Design step 6 lists the runbook.
+
+Questions:
+
+- Which servers outside the llama-server and TGI exemptions serve names they do not list? Open: llama-swap, SGLang, KoboldCpp, text-generation-webui, TabbyAPI and `mlx_lm.server` were not probed, since none runs where this was written; `--allow-unlisted` (route, MCP) and a role naming the model (`axis agent --model`) keep such a route usable.
+- With `--allow-unlisted`, should an earlier hub at 0.55 win over a later hub at 0.95? Verified: this is the existing lazy-load behavior, where the route returns the first selectable backend in the operator's prefer order (`internal/llmrouter/route.go`); the spec keeps that order unchanged.
+- Does the incident case hold end to end on a live hub? Open: reproducing it means re-enabling a dead alias on a shared hub; the unit tests cover it, and the live run of all eight current aliases is in Research.
+- Does LiteLLM route on the exact `model_name` and prepend `custom_llm_provider`? Verified: the spec review read the exact-name lookup in LiteLLM 1.81.10, and the second diff review read `get_llm_provider_logic.py` in LiteLLM 1.93.0 and found it matches `forwardedModel`.
+
+Kind: diff
+Reviewer: second independent fresh-context session (Claude Code `claude -p`, new session in a separate directory, given only `docs/superpowers/review-prompt.md` and its five inputs; a cross-family Codex review was attempted and could not run, its provider returning 402)
+Model: Anthropic Claude (a fresh session of the authoring model's family)
+Base: e22d51a5a4a737467206ba069fc4af96900c8b84
+Head: a8b91614ae7b52dfbe3515eb0e91c47e775002c0
+Date: 2026-11-19
+Verdict: approve-with-changes
+
+1. Minor: no test failed when the dead-upstream wording or the new JSON/YAML fields broke. Fixed in 68c722d4, with the first diff review's finding 1: the dead-upstream suffix and reasoning are asserted, and the `upstreams` JSON and YAML must carry `model` and `unlisted`; each mutant now fails.
+
+2. Minor: the spec named `modelAPIBases` and `upstream_test.go`, which the code does not use. Fixed in 68c722d4: Design step 1 names `modelDeployments`, and the test list names `upstream_model_test.go` and the dead-upstream test in `upstream_test.go`.
+
+Questions:
+
+- Do other servers serve a name they do not list (llama-cpp-python, KoboldCpp, text-generation-webui, SGLang)? Open: not probed, as in the first diff review's question; the same two escapes apply.
+- Is TGI's signature as the spec says? Verified: `router/src/server.rs` on its main branch, read on 2026-11-19, builds the one `/v1/models` entry with `id` and `owned_by` both set to the model ID, and maps a chat `model` of `tgi` or none to the loaded model.
+- Do the live-hub results hold? Verified: the author ran `axis ai route --model` with this branch against the hub's eight aliases on 2026-11-19, all healthy at 0.95 with their forwarded names derived, as Research records.
+
+Note: two diff reviews are required, for about 240 changed non-test `.go` lines across `cmd/axis`, `internal/llmrouter` and `internal/mcp`.
