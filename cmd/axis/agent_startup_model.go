@@ -29,6 +29,7 @@ type ModelChoice = agent.ModelTarget
 // agentStartupBackendParams carries inputs needed to select the model and configure the backend.
 type agentStartupBackendParams struct {
 	Model                 string
+	ExplicitModel         bool // operator supplied --model, before role expansion
 	StartupRequestedModel string
 	Provider              string
 	CloudModel            string
@@ -122,7 +123,16 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 		}
 	}
 
+	// An explicit --model that no catalog entry has may come from a configured
+	// backend that lists it. Choices (REPL completion) stays the catalog: /model
+	// rebuilds the catalog and would refuse the added entry.
+	catalog := choices
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
+	mode := strings.ToLower(strings.TrimSpace(provider))
+	if explicitTarget == nil && p.ExplicitModel && p.Model != "" && strings.TrimSpace(cloudModel) == "" &&
+		(mode == "" || mode == "auto" || mode == "local") {
+		choices = appendExplicitAIModelChoice(p.Ctx, p.Model, p.RT, choices)
+	}
 	activeTarget, cloudOpts, readiness, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
 	if err != nil {
 		return agentStartupBackendResult{}, ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
@@ -160,7 +170,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	return agentStartupBackendResult{
 		ActiveTarget: activeTarget,
 		Backend:      backend,
-		Choices:      choices,
+		Choices:      catalog,
 		Readiness:    readiness,
 	}, nil
 }
