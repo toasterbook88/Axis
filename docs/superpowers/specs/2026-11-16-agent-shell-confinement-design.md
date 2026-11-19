@@ -282,16 +282,21 @@ Head: a987874b9694e90466a523bb7c5f5108090f3ecb
 Date: 2026-11-18
 Verdict: revise
 
-1. Blocker: caller context policy does not reach daemon HTTP execution. Proposed resolution:
-   Design 3 requires in-process guarded execution and daemon-available no-fallback regressions.
-2. Blocker: bwrap-only acceptance leaves host UNIX sockets reachable. Proposed resolution:
-   Design 1 requires ABI >= 9 AND bwrap; Design 2 denies host socket grants even under cwd.
-3. Major: Landlock-only acceptance leaves filesystem metadata mutable. Proposed resolution:
-   Design 2 requires read-only mounts and Tests cover metadata changes outside allowed roots.
-4. Blocker: the public document included real maintainer fleet inventory. Proposed resolution:
-   Problem, Alternatives and Research use generic threats, primary docs and a synthetic matrix.
-5. Major: an allowed ancestor of HOME grants access to HOME. Proposed resolution:
-   Design 4 canonicalizes and rejects root/HOME-containing roots; Tests cover ancestors and aliases.
+1. Blocker: caller context policy does not reach daemon HTTP execution. Fixed in
+   0b02d491ee377b1fc3167f40e84d0a7231f9c536 (proposed spec text only): Design 3 requires in-process
+   guarded execution and daemon-available no-fallback regressions; implementation is pending.
+2. Blocker: bwrap-only acceptance leaves host UNIX sockets reachable. Fixed in
+   0b02d491ee377b1fc3167f40e84d0a7231f9c536 (proposed spec text only): Design 1 requires ABI >= 9
+   AND bwrap; Design 2 denies host socket grants even under cwd; implementation is pending.
+3. Major: Landlock-only acceptance leaves filesystem metadata mutable. Fixed in
+   0b02d491ee377b1fc3167f40e84d0a7231f9c536 (proposed spec text only): Design 2 requires read-only
+   mounts and Tests cover metadata changes outside allowed roots; implementation is pending.
+4. Blocker: the public document included real maintainer fleet inventory. Fixed in
+   0b02d491ee377b1fc3167f40e84d0a7231f9c536: Problem, Alternatives and Research now use generic
+   threats, primary docs and a synthetic matrix; existing Git history was not rewritten.
+5. Major: an allowed ancestor of HOME grants access to HOME. Fixed in
+   0b02d491ee377b1fc3167f40e84d0a7231f9c536 (proposed spec text only): Design 4 canonicalizes and
+   rejects root/HOME-containing roots; Tests cover ancestors and aliases; implementation is pending.
 
 Questions:
 - How is helper identity preserved across executable pathname replacement? Open: Design 2 proposes
