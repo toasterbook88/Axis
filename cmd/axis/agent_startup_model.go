@@ -123,6 +123,10 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 		}
 	}
 
+	// An explicit --model that no catalog entry has may come from a configured
+	// backend that lists it. Choices (REPL completion) stays the catalog: /model
+	// rebuilds the catalog and would refuse the added entry.
+	catalog := choices
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
 	mode := strings.ToLower(strings.TrimSpace(provider))
 	if explicitTarget == nil && p.ExplicitModel && p.Model != "" && strings.TrimSpace(cloudModel) == "" &&
@@ -166,7 +170,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	return agentStartupBackendResult{
 		ActiveTarget: activeTarget,
 		Backend:      backend,
-		Choices:      choices,
+		Choices:      catalog,
 		Readiness:    readiness,
 	}, nil
 }

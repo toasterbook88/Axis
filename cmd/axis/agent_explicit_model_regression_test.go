@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"io"
@@ -59,12 +60,28 @@ func TestRoleDoesNotResolveAsBareExplicitModel(t *testing.T) {
 			if console {
 				_, _ = consoleExplicitPrelude(context.Background(), &agentStartupInputs{role: "review", provider: "local"}, loadAgentShellRuntime, time.Second, setupAgentStartupBackend)
 			} else {
+				// Run the real setup, then stop before generation so the test
+				// never reaches a real local Ollama.
+				var origins []bool
+				prevSetup := agentStartupBackendFn
+				t.Cleanup(func() { agentStartupBackendFn = prevSetup })
+				agentStartupBackendFn = func(p agentStartupBackendParams) (agentStartupBackendResult, error) {
+					origins = append(origins, p.ExplicitModel)
+					res, err := setupAgentStartupBackend(p)
+					if err == nil {
+						err = errStopBeforeGeneration
+					}
+					return res, err
+				}
 				cmd := agentCmd()
 				cmd.SetOut(io.Discard)
 				cmd.SetErr(io.Discard)
 				cmd.SetArgs([]string{"--role", "review", "--provider", "local", "--plain", "-p", "inspect"})
 				if err := cmd.Execute(); err == nil {
-					t.Fatal("unavailable pinned model must fail before generation")
+					t.Fatal("startup did not stop before generation")
+				}
+				if len(origins) != 1 || origins[0] {
+					t.Fatalf("--role reached setup as an explicit model: %v", origins)
 				}
 			}
 			for _, url := range *seen {
@@ -75,6 +92,8 @@ func TestRoleDoesNotResolveAsBareExplicitModel(t *testing.T) {
 		})
 	}
 }
+
+var errStopBeforeGeneration = errors.New("test: stop before generation")
 
 func TestConsolePreservesExplicitModelOrigin(t *testing.T) {
 	_, cfg := explicitModelConfig(t, nil, nil)

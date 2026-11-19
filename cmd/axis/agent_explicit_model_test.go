@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
@@ -25,6 +27,7 @@ func TestExplicitGatewayModelWithoutRoleReachesStartup(t *testing.T) {
 			Probed: true, Healthy: true, ModelPresent: true, Probes: []llmrouter.BackendProbe{{Backend: "gateway", OK: true, Models: []string{"review-model"}}}}, nil
 	}
 	stubStartupReady(t, nil)
+	stubOllamaHas(t, func(string) bool { return false })
 	got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
 		Provider: "local", RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
 	if err != nil {
@@ -32,6 +35,68 @@ func TestExplicitGatewayModelWithoutRoleReachesStartup(t *testing.T) {
 	}
 	if got.ActiveTarget.Protocol != agent.ProtocolOpenAI || got.ActiveTarget.Endpoint != "https://gateway.example/v1" || got.ActiveTarget.ProviderName != "ai-backend:gateway" {
 		t.Fatalf("wrong target: %+v", got.ActiveTarget)
+	}
+	// /model rebuilds the catalog, so completion must not offer the added entry.
+	for _, c := range got.Choices {
+		if strings.HasPrefix(c.ID, "ai-model:") {
+			t.Fatalf("switchable choices include the startup-only entry: %+v", got.Choices)
+		}
+	}
+}
+
+func stubOllamaHas(t *testing.T, has func(string) bool) {
+	t.Helper()
+	prev := ollamaHasModelFn
+	t.Cleanup(func() { ollamaHasModelFn = prev })
+	ollamaHasModelFn = has
+}
+
+// A copy already on this machine's Ollama wins over a backend that lists the
+// same name, even when the snapshot catalog does not show it yet.
+func TestExplicitModelOnLocalOllamaKeepsTheLocalCopy(t *testing.T) {
+	for _, provider := range []string{"auto", "local"} {
+		t.Run(provider, func(t *testing.T) {
+			seen, _ := explicitModelConfig(t, []config.AIBackendConfig{{Name: "gateway", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://gateway.example/v1"}},
+				map[string]string{"https://gateway.example/v1/models": `{"data":[{"id":"review-model"}]}`})
+			stubOllamaHas(t, func(name string) bool { return name == "review-model" })
+			stubStartupReady(t, nil)
+			got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
+				Provider: provider, RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
+			if err != nil || got.ActiveTarget.ID != "local:ollama:review-model" || len(*seen) != 0 {
+				t.Fatalf("local copy lost: target=%+v err=%v probes=%v", got.ActiveTarget, err, *seen)
+			}
+		})
+	}
+}
+
+// --provider cloud without --cloud-model must not look at ai.yaml backends.
+func TestExplicitModelWithCloudProviderProbesNoBackend(t *testing.T) {
+	seen, _ := explicitModelConfig(t, []config.AIBackendConfig{{Name: "gateway", Kind: config.AIBackendOpenAICompatible, BaseURL: "https://gateway.example/v1"}},
+		map[string]string{"https://gateway.example/v1/models": `{"data":[{"id":"review-model"}]}`})
+	stubStartupReady(t, nil)
+	_, _ = setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
+		Provider: "cloud", RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
+	if len(*seen) != 0 {
+		t.Fatalf("cloud provider mode probed ai.yaml backends: %v", *seen)
+	}
+}
+
+// A backend on this machine yields an entry with no node name, as role entries
+// get from collectModelChoices, and carries no catalog Listed fact.
+func TestExplicitBackendChoiceOnThisNodeHasNoNodeName(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skip("no hostname")
+	}
+	_, _ = explicitModelConfig(t, []config.AIBackendConfig{{Name: "gateway", Kind: config.AIBackendOpenAICompatible,
+		BaseURL: "http://127.0.0.1:18080/v1", Node: "here"}}, map[string]string{"http://127.0.0.1:18080/v1/models": `{"data":[{"id":"review-model"}]}`})
+	rt := &runtimectx.Context{
+		Config:   &config.Config{Nodes: []config.NodeConfig{{Name: "here", Hostname: host}}},
+		Snapshot: &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "here", Hostname: host}}},
+	}
+	got := appendExplicitAIModelChoice(context.Background(), "review-model", rt, nil)
+	if len(got) != 1 || got[0].Node != "" || got[0].Listed {
+		t.Fatalf("entry for this machine must match a role entry: %+v", got)
 	}
 }
 
@@ -45,6 +110,7 @@ func explicitModelConfig(t *testing.T, backends []config.AIBackendConfig, bodies
 	t.Cleanup(func() { inferenceAILoadFn, inferenceResolveFn = previousLoad, previousResolve })
 	cfg := &config.AIConfig{Backends: backends}
 	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+	stubOllamaHas(t, func(string) bool { return false })
 	var seen []string
 	var mu sync.Mutex
 	client := &http.Client{Transport: explicitModelTransport(func(r *http.Request) (*http.Response, error) {
@@ -83,10 +149,11 @@ func TestExplicitGatewaySkipsEmptyAndTaggedOnlyBackends(t *testing.T) {
 func TestExplicitGatewayProvesTheViewerEndpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name, node, hostname, want string
+		security                   agent.BackendSecurityClass
 	}{
-		{"optional-node", "", "", "https://advertised.example/v1"},
-		{"peer", "peer", "peer.example", "https://advertised.example/v1"},
-		{"local", "here", "localhost", "http://127.0.0.1:18080/v1"},
+		{"optional-node", "", "", "https://advertised.example/v1", agent.BackendRemote},
+		{"peer", "peer", "peer.example", "https://advertised.example/v1", agent.BackendRemote},
+		{"local", "here", "localhost", "http://127.0.0.1:18080/v1", agent.BackendLocal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := "https://base.example/v1"
@@ -100,6 +167,10 @@ func TestExplicitGatewayProvesTheViewerEndpoint(t *testing.T) {
 			got := appendExplicitAIModelChoice(context.Background(), "review-model", rt, nil)
 			if len(got) != 1 || got[0].Endpoint != tc.want || !strings.Contains(strings.Join(*seen, " "), tc.want+"/models") {
 				t.Fatalf("target and positive proof must agree: got=%+v probes=%v", got, *seen)
+			}
+			// SecurityClass decides whether full local evidence is sent.
+			if got[0].SecurityClass != tc.security {
+				t.Fatalf("security class %v, want %v for %s", got[0].SecurityClass, tc.security, tc.want)
 			}
 		})
 	}

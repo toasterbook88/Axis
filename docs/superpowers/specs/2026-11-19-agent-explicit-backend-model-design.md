@@ -1,16 +1,17 @@
 # `axis agent --model`: use a configured backend that serves the named model
 
-Date: 2026-11-19. Status: implemented on `fix/agent-explicit-backend-model`; spec review pending.
+Date: 2026-11-19. Status: implemented on `fix/agent-explicit-backend-model`; spec review
+approve-with-changes, its findings resolved below.
 The code was written on 2026-11-04 and 2026-11-05 on a branch that was never pushed, and was ported
 to current `main` on 2026-11-19. This spec was written after that code, which is out of order under
 AGENTS.md §8; the PR asks the maintainer to accept or reject that order.
 
 ## Problem
 
-`axis agent --model M` accepts M only when the `/models` catalog lists it: a role entry from
-`~/.axis/ai.yaml` (`ai-role:<name>`), a local Ollama tag, a resident or node endpoint, or a cloud
-model. A model that a configured `ai.yaml` backend serves, but that no role names, is refused before
-any request:
+In the default `--provider auto`, `axis agent --model M` accepts M when the `/models` catalog lists
+it (a role entry from `~/.axis/ai.yaml` as `ai-role:<name>`, a catalog Ollama tag, a resident or node
+endpoint, or a cloud model) or when this machine's Ollama has it on disk. A model that a configured
+`ai.yaml` backend serves, but that no role names, is refused before any request:
 
 ```
 error: model "M" is not in the model catalog or on local Ollama; /models lists the choices
@@ -18,7 +19,9 @@ error: model "M" is not in the model catalog or on local Ollama; /models lists t
 
 `axis ai route --model M` resolves the same model to that backend (`no role; scanning enabled
 backends for model "M"`, healthy, `model_seen: true`), so two AXIS surfaces disagree about the same
-configuration. On a cluster whose hub lists eleven models, `axis ai route --model` resolved all
+configuration. With `--provider local` the name is not refused: it becomes a local Ollama target,
+which fails at the first request when this machine does not have it. On a cluster whose hub lists
+eleven models, `axis ai route --model` resolved all
 eleven to the hub, and `axis agent --model` in v0.26.0 refused the six that no role names. The only
 workaround is a role per model in `ai.yaml`.
 
@@ -32,6 +35,10 @@ workaround is a role per model in `ai.yaml`.
   switching, or to the `/models` catalog contents.
 - No configuration writes, no model loading or lifecycle actions, no new flag, config key, state
   file or output field.
+- The agent stays stricter than `axis ai route` about tags. The router treats `coder` and
+  `coder:7b` as the same listing (`llmrouter.ModelListed`); this lookup accepts only the exact ID,
+  plus `M:latest` for an untagged name on Ollama. A backend that lists only a tagged variant is not
+  used, and startup refuses with the existing message.
 - No proof that a listed model is servable. A hub can list an alias whose upstream has no
   deployment; the existing readiness check still runs and reports that.
 
@@ -50,34 +57,54 @@ startup calls `appendExplicitAIModelChoice` (`cmd/axis/agent_explicit_model.go`)
 
 1. Returns the catalog unchanged when an enabled local catalog entry already has the model
    (case-insensitive), so existing entries keep their identity.
-2. Loads `ai.yaml`. With no file, no backends or a load error it returns the catalog unchanged.
-3. Walks the enabled backends in file order, skipping kinds other than `ollama`,
+2. Loads `ai.yaml`. With no file, no backends, a load error or a cancelled context it returns the
+   catalog unchanged.
+3. Returns the catalog unchanged when this machine's Ollama has the model on disk
+   (`ollamaHasModelFn`, the check auto mode already makes), so a local copy keeps winning even when
+   the snapshot catalog is stale, as before this change.
+4. Walks the enabled backends in file order, skipping kinds other than `ollama`,
    `openai-compatible`, `llamacpp` and `mlx`. For each it picks the endpoint the catalog would use
    (`chooseAICatalogEndpoint`: `base_url` on the backend's own node, `advertise_url` elsewhere),
    strips `/v1` for Ollama, and asks the router to resolve the model against that one backend with
    `RequireModelListed`.
-4. Accepts a backend only on positive proof: the router probed it, it is healthy, the model is
+5. Accepts a backend only on positive proof: the router probed it, it is healthy, the model is
    present, and the decision's backend, model, endpoint and kind all equal what was asked; and the
    backend's own probe listed exactly M, or `M:latest` for an untagged Ollama name.
-5. Appends one choice for the first accepted backend and stops:
+6. Appends one choice for the first accepted backend and stops:
    `ID: ai-model:<backend>:<M>`, the backend's protocol (`ollama` or OpenAI), `ProviderName:
    ai-backend:<backend>` so the existing key lookup (`apiKeyForAIBackend`) binds the backend's
    credential, `ProviderKind: local`, and `SecurityClass` local only when
-   `llmrouter.EndpointIsClusterLocal(endpoint)`, otherwise remote. These match the fields of role
-   catalog entries (`cmd/axis/inference_hint.go`), so redaction and credential handling are the
-   same as for a role pointing at the same backend.
+   `llmrouter.EndpointIsClusterLocal(endpoint)`, otherwise remote. `Node` is the backend's node,
+   cleared by `localizeChoiceNodes` when that is this machine, and no catalog fact such as `Listed`
+   is set. These match role catalog entries (`cmd/axis/inference_hint.go`) after
+   `collectModelChoices`, so redaction, credential handling, the banner and session-log provenance
+   are the same as for a role pointing at the same backend.
+
+The added choice is used for this startup only. `agentStartupBackendResult.Choices`, which feeds
+plain-REPL completion, stays the catalog without it, because `/model` rebuilds the catalog and would
+refuse it. In local mode the first matching catalog entry wins over the local Ollama target, so with
+`--provider local` a name that is not on disk now reaches the backend that lists it instead of
+failing at the first request.
 
 The whole walk shares one `inferenceHintTimeout` (3 s) and stops on cancellation. Any failure, an
 expired budget or no accepting backend leaves the catalog as it was, and startup refuses with the
-existing error. `docs/current-state.md` records the behavior.
+existing error (in local mode, the local Ollama target). `docs/current-state.md` records the
+behavior. `agentCmd` calls the setup through `agentStartupBackendFn`, a test seam, so command tests
+can stop after startup without generating.
 
 Tests (`cmd/axis/agent_explicit_model_test.go`, `agent_explicit_model_regression_test.go`) cover:
-a backend-only model reaching startup; empty, tag-only, disabled and unsupported backends skipped;
-each kind of unproven or mismatched router decision refused; the viewer-selected endpoint proved;
-the Ollama `:latest` rule; an existing catalog entry kept; cancellation and an empty model probing
-nothing; the credential binding kept; implicit startup unchanged; cloud precedence unchanged;
-`--role` not escaping its preferences (CLI and console); the console keeping the explicit origin;
-and an Ollama `/v1` base URL still reaching `/api/chat`.
+a backend-only model reaching startup, and staying out of the switchable choices; a copy on local
+Ollama winning with no backend probed (auto and local); empty, tag-only, disabled and unsupported
+backends skipped; each kind of unproven or mismatched router decision refused; the viewer-selected
+endpoint proved, with the security class it implies (remote for an advertised URL, local for
+loopback); an entry for this machine having no node name and no `Listed`; the Ollama `:latest`
+rule; an existing catalog entry kept; cancellation and an empty model probing nothing; the
+credential binding kept; implicit startup unchanged; cloud precedence unchanged, and
+`--provider cloud` without `--cloud-model` probing no backend; `--role` not escaping its
+preferences and not reaching setup as an explicit model (CLI, which stops after setup, and
+console); the console keeping the explicit origin; and an Ollama `/v1` base URL still reaching
+`/api/chat`. The six tests added or changed for the spec review were each checked to fail when the
+behavior they cover is removed.
 
 ## Alternatives
 

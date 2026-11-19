@@ -37,6 +37,10 @@ var signalAgentDaemonRefresh = func(ctx context.Context, trigger string) error {
 }
 var agentDaemonExecutionAddr = api.DefaultAddr
 
+// agentStartupBackendFn lets command tests stop after backend setup, before
+// any generation.
+var agentStartupBackendFn = setupAgentStartupBackend
+
 func agentCmd() *cobra.Command {
 	var (
 		model                   string
@@ -203,7 +207,7 @@ func agentCmd() *cobra.Command {
 			}
 
 			// Determine and configure backend via extracted setupAgentStartupBackend.
-			startupBackend, err := setupAgentStartupBackend(agentStartupBackendParams{
+			startupBackend, err := agentStartupBackendFn(agentStartupBackendParams{
 				Model:                 model,
 				ExplicitModel:         explicitModel,
 				StartupRequestedModel: startupRequestedModel,

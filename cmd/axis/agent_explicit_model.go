@@ -29,6 +29,14 @@ func appendExplicitAIModelChoice(ctx context.Context, requested string, rt *runt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if ctx.Err() != nil {
+		return choices
+	}
+	// A copy already on this machine's Ollama keeps winning, as it did before
+	// this lookup existed, even when the snapshot catalog is stale.
+	if ollamaHasModelFn(requested) {
+		return choices
+	}
 	ctx, cancel := context.WithTimeout(ctx, inferenceHintTimeout)
 	defer cancel()
 	var nodes *config.Config
@@ -86,9 +94,15 @@ func appendExplicitAIModelChoice(ctx context.Context, requested string, rt *runt
 		if llmrouter.EndpointIsClusterLocal(endpoint) {
 			security = agent.BackendLocal
 		}
-		return append(choices, ModelChoice{ID: "ai-model:" + backend.Name + ":" + requested,
+		// Shaped like a role catalog entry (inference_hint.go), including the
+		// empty Node collectModelChoices gives this machine.
+		choice := []ModelChoice{{ID: "ai-model:" + backend.Name + ":" + requested,
 			Model: requested, Protocol: protocol, ProviderName: "ai-backend:" + backend.Name,
-			ProviderKind: "local", Node: decision.Node, Endpoint: endpoint, SecurityClass: security, Listed: true})
+			ProviderKind: "local", Node: decision.Node, Endpoint: endpoint, SecurityClass: security}}
+		if rt != nil {
+			localizeChoiceNodes(choice, rt.Snapshot)
+		}
+		return append(choices, choice[0])
 	}
 	return choices
 }
