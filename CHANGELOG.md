@@ -1,3 +1,21 @@
+## v0.28.0 (2026-11-20)
+
+`axis doctor` warns when a node's root volume is nearly full.
+
+### Features
+
+* `axis doctor` adds a "Disk space" check, from the daemon snapshot it already
+  loads: a node warns when less than 10% of its root volume is free (the
+  kubelet's default eviction threshold) and is "critically low" below 3%,
+  judged so that the collectors' whole-GiB rounding cannot raise a false
+  warning. Low nodes are listed lowest share first; nodes without disk facts,
+  including unreachable or errored ones, are named. The check only warns, so
+  doctor's exit code is unchanged, `--strict` included (#675).
+
+### Documentation
+
+* README names v0.27.1 (#674).
+
 ## v0.27.1 (2026-11-20)
 
 `axis capability` refuses journal entries from checkers Axis does not have, and
