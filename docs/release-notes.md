@@ -8,6 +8,57 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.27.0 upgrade guide
+
+[v0.27.0](https://github.com/toasterbook88/axis/releases/tag/v0.27.0) was published
+from commit `bdcab229`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
+v0.26.0 are listed in the [changelog](../CHANGELOG.md#v0270-2026-11-19).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### `axis agent --model` can use a model only a backend serves
+
+`axis agent --model M` and `axis tui --model M` used to refuse a model that a
+configured `ai.yaml` backend serves but no role names ("not in the model catalog
+or on local Ollama"), although `axis ai route --model M` resolved it. When no
+enabled local catalog entry has M and this machine's Ollama does not have it,
+the enabled backends are now probed in file order, and the first whose fresh
+listing names exactly M (or `M:latest` for an untagged Ollama name) is used. The
+choice is shaped like a role entry: the backend's credential, its local or
+remote security class, and its node. A copy on local Ollama still wins, `--role`
+stays pinned to its preferences, and implicit, cloud and interactive `/model`
+selection are unchanged. A disabled or cloud catalog entry with the same name no
+longer stops the lookup, so a model whose role points at an unreachable backend
+can start on another backend that lists it.
+
+### `axis ai route` checks that the server behind a hub has the model
+
+For a LiteLLM-style hub on this machine, `axis ai route` and MCP
+`inference_route_explain` already asked each server behind the model whether it
+answers. They now also read its model list and compare it with the name the hub
+forwards (`litellm_params.model` without its provider prefix, or given by
+`custom_llm_provider`). A server that is up but does not list that name does not
+serve it:
+
+- strict routing, the default, skips the hub, and exit 7 ends with
+  "(listed, but no upstream serves it)";
+- `--allow-unlisted` (`allow_unlisted` over MCP) keeps the hub selectable at
+  confidence 0.55;
+- each check in `upstreams` reports `model` and `unlisted`.
+
+Lists that cannot say give no verdict, as before: an empty or unparseable list,
+a 401/403, llama-server and TGI, which serve names they do not list. A hub that
+was reported healthy while every chat to an alias failed with 404 and then 429
+is now reported as not serving it. `axis agent --model` resolves strictly; for a
+server that serves a name it does not list, add a role that names the model.
+
+### Also in this release
+
+- Design specs for confining auto-approved `run_shell` under `--autonomy full`
+  (#660) and for a rendered fleet config with drift checks (#667). Neither is
+  implemented yet.
+
 ## v0.26.0 upgrade guide
 
 [v0.26.0](https://github.com/toasterbook88/axis/releases/tag/v0.26.0) was published
