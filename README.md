@@ -23,7 +23,7 @@ Install to `~/.local/bin` (no `sudo`), then check the binary. macOS and Linux on
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.27.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.27.1 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -128,7 +128,7 @@ The [Quick start](#quick-start) command is the recommended workstation install. 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.27.0 AXIS_REQUIRE_PINNED=1 bash
+  | AXIS_VERSION=v0.27.1 AXIS_REQUIRE_PINNED=1 bash
 ```
 
 A system install may remove verified user-local AXIS copies so only one `axis` is on `PATH`. Set `AXIS_KEEP_LEGACY=1` to keep them.
@@ -176,7 +176,7 @@ Preview an install without writing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.27.0 bash
+  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.27.1 bash
 ```
 
 </details>
@@ -345,7 +345,7 @@ For a system-wide install, remove `/usr/local/bin/axis` with `sudo` instead.
 
 | Item | Value |
 | --- | --- |
-| Latest release | [**v0.27.0**](https://github.com/toasterbook88/axis/releases/tag/v0.27.0) (tag commit `bdcab229`) |
+| Latest release | [**v0.27.1**](https://github.com/toasterbook88/axis/releases/tag/v0.27.1) (tag commit `79d66eb8`) |
 | Supported security line | `v0.27.x` (see [`SECURITY.md`](SECURITY.md)) |
 | Release builds | darwin and linux × amd64 and arm64 (reproducible GoReleaser builds) |
 
