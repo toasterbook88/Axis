@@ -330,6 +330,23 @@ func TestALocalCheckUsesTheSnapshotNameOfThisMachine(t *testing.T) {
 	}
 }
 
+// A snapshot node whose hostname only shares this machine's first label is
+// another machine, so a local check does not take its name.
+func TestALocalCheckIgnoresANodeSharingOnlyTheFirstLabel(t *testing.T) {
+	useTempAxisHome(t)
+	facts := sampleFacts(sampleHardware)
+	facts.Hostname = "alpha-workstation.example"
+	fakeHardware(t, facts, nil, sampleHardware, nil)
+	prev := capabilitySnapshotNodes
+	t.Cleanup(func() { capabilitySnapshotNodes = prev })
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) {
+		return []models.NodeFacts{{Name: "beta", Hostname: "alpha-workstation.remote.example"}}, nil
+	}
+	if obs := checkFactsHardware(context.Background(), ""); obs.Subject != "node:alpha-workstation" {
+		t.Fatalf("subject = %q, want the hostname, not another machine's name", obs.Subject)
+	}
+}
+
 func TestCapabilityCheckJSONMatchesTheJournal(t *testing.T) {
 	home := useTempAxisHome(t)
 	fakeHardware(t, sampleFacts(sampleHardware), nil, sampleHardware, nil)

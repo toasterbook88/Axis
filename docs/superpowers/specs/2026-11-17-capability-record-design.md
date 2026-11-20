@@ -21,8 +21,11 @@ work on it.
 
 - No surface reads a level to allow or refuse an action. The record is advisory: a ledger of what was
   observed, not an authority path. Wiring levels into autonomy or A2A is a later change with its own spec.
-- No protection against a writer running as the same user. Anything that can run `axis capability`
-  can rewrite the journal and the state together. `verify` detects cheaper tampering only.
+- No protection against a writer running as the same user. Anything that can write as this user can
+  append a well-formed entry, which counts once the state catches up, or rewrite the journal and the
+  state together. `verify` detects cheaper tampering only: a broken chain, an entry out of normal
+  form, and a checker observation naming a checker Axis does not have (2026-11-19, after an audit
+  showed one appended line was enough and an invented checker name was accepted).
 - No per-agent records. The `actor` field exists in the schema, but only `axis` holds a record until
   an actor's identity can be verified.
 - No new network listener and no daemon change. Node checks use the published snapshot and the existing

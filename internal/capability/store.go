@@ -96,6 +96,9 @@ func (s *Store) RecordCheck(obs Observation, policies Policies) (Record, Observa
 	if strings.TrimSpace(obs.Checker) == "" {
 		return Record{}, Observation{}, nil, errors.New("a checker observation must name its checker")
 	}
+	if !KnownChecker(strings.TrimSpace(obs.Checker)) {
+		return Record{}, Observation{}, nil, fmt.Errorf("checker %q is not one of Axis's checkers", obs.Checker)
+	}
 	return s.commitObservation(obs, policies)
 }
 

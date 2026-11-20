@@ -124,6 +124,25 @@ const (
 	OriginExternal Origin = "external"
 )
 
+// Axis's own checkers, as they name themselves in the record. A checker-origin
+// observation must name one of them, with NodeCheckerSuffix when it checked
+// another machine (--node / --all-nodes): the record counts passes only from
+// Axis's own checkers, and a name none of them uses proves none ran.
+const (
+	CheckerFactsHardware = "axis capability check facts.hardware"
+	CheckerFactsGPU      = "axis capability check facts.gpu"
+	NodeCheckerSuffix    = " --node"
+)
+
+// KnownChecker reports whether name is one of Axis's own checkers.
+func KnownChecker(name string) bool {
+	switch strings.TrimSuffix(name, NodeCheckerSuffix) {
+	case CheckerFactsHardware, CheckerFactsGPU:
+		return true
+	}
+	return false
+}
+
 // Observation is one checked claim about a capability.
 type Observation struct {
 	At         time.Time `json:"at"`

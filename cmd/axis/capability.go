@@ -451,8 +451,10 @@ the state file. It writes nothing.
 
 It catches an edited state, an edited or removed journal line, a journal
 shorter than the state, and a transitions log that no longer matches the
-journal. It cannot catch a consistent rewrite of journal and state, which
-anything running as this user can make.
+journal, and a checker observation naming a checker Axis does not have. It
+cannot catch a well-formed entry appended to the journal, which counts once the
+state catches up, or a consistent rewrite of journal and state; anything running
+as this user can make either.
 
 --repair-transitions first rebuilds the derived transitions.jsonl from the
 journal (for when a write of it failed after the state was saved). It never

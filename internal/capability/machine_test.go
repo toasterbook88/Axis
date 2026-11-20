@@ -18,7 +18,7 @@ var t0 = time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 //	i  inconclusive
 func obsOf(kind byte) Observation {
 	o := Observation{Capability: "facts.hardware", Actor: DefaultActor, Origin: OriginChecker, Outcome: OutcomePass,
-		At: t0, Checker: "test", Evidence: Evidence{Kind: EvidenceLiveProbe, Ref: "uname(2)"}}
+		At: t0, Checker: CheckerFactsHardware, Evidence: Evidence{Kind: EvidenceLiveProbe, Ref: "uname(2)"}}
 	switch kind {
 	case 'x':
 		o.Origin = OriginExternal

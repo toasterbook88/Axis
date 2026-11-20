@@ -49,7 +49,7 @@ var (
 	capabilityProbeHardware = probeHardware
 )
 
-const factsHardwareChecker = "axis capability check facts.hardware"
+const factsHardwareChecker = capability.CheckerFactsHardware
 
 // checkFactsHardware compares what the AXIS fact collector reports for this
 // machine with a reading the probe takes through system calls. The evidence
@@ -174,7 +174,7 @@ func localSubject(ctx context.Context, hostname string) string {
 	host := shortHostname(hostname)
 	if nodes, err := capabilitySnapshotNodes(ctx); err == nil {
 		for _, n := range nodes {
-			if host != "" && (shortHostname(n.Hostname) == host || shortHostname(n.Name) == host) {
+			if host != "" && (sameMachineName(n.Hostname, hostname) || sameMachineName(n.Name, hostname)) {
 				return nodeSubject(n.Name)
 			}
 		}
@@ -183,6 +183,20 @@ func localSubject(ctx context.Context, hostname string) string {
 		return ""
 	}
 	return "node:" + host
+}
+
+// sameMachineName reports whether name names the machine called hostname, by
+// the rule of models.IsLocalHost: a bare name matches the short hostname, and
+// a qualified one only the full hostname.
+func sameMachineName(name, hostname string) bool {
+	name, hostname = strings.ToLower(strings.TrimSpace(name)), strings.ToLower(strings.TrimSpace(hostname))
+	if name == "" || hostname == "" {
+		return false
+	}
+	if strings.Contains(name, ".") {
+		return name == hostname
+	}
+	return name == shortHostname(hostname)
 }
 
 func shortHostname(host string) string {

@@ -196,6 +196,37 @@ func TestProbeRunnerUsesALocalShellForThisMachine(t *testing.T) {
 	}
 }
 
+// A node whose name or hostname only shares this machine's first label is
+// another machine: it is dialed over SSH, not probed here.
+func TestCapabilityNodeIsLocalNeedsTheFullHostnameForAQualifiedName(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skip("no hostname here")
+	}
+	short := shortHostname(host)
+	for _, tc := range []struct {
+		node config.NodeConfig
+		want bool
+	}{
+		{config.NodeConfig{Name: short + ".remote.example", Hostname: "unreachable.example"}, false},
+		{config.NodeConfig{Name: "alpha", Hostname: short + ".remote.example"}, false},
+		{config.NodeConfig{Name: short, Hostname: "192.0.2.10"}, true},
+		{config.NodeConfig{Name: "alpha", Hostname: host}, true},
+	} {
+		if got := capabilityNodeIsLocal(tc.node); got != tc.want {
+			t.Errorf("capabilityNodeIsLocal(%+v) = %v, want %v (this machine is %q)", tc.node, got, tc.want, host)
+		}
+	}
+	prev := capabilitySnapshotNodes
+	t.Cleanup(func() { capabilitySnapshotNodes = prev })
+	capabilitySnapshotNodes = func(context.Context) ([]models.NodeFacts, error) {
+		return []models.NodeFacts{{Name: "alpha", Hostname: short + ".remote.example"}}, nil
+	}
+	if ex, _ := probeRunnerFor(context.Background(), config.NodeConfig{Name: "alpha", Hostname: "192.0.2.10"}); fmt.Sprintf("%T", ex) != "*transport.SSHExecutor" {
+		t.Fatalf("a snapshot hostname sharing only the first label made the probe run here (%T)", ex)
+	}
+}
+
 // TestTheNodeProbeNeverPassesAGPUListItCannotRead runs the real probe script
 // against a stand-in for /proc/driver/nvidia/gpus.
 func TestTheNodeProbeNeverPassesAGPUListItCannotRead(t *testing.T) {
