@@ -1,6 +1,7 @@
 # `axis doctor`: warn when a node's root volume is nearly full
 
-Date: 2026-11-20. Status: proposed; spec review pending. No code yet.
+Date: 2026-11-20. Status: proposed; spec review approve-with-changes, its findings resolved below.
+No code yet.
 
 ## Problem
 
@@ -28,16 +29,20 @@ In `runDoctor` (`cmd/axis/doctor.go`), after the "Daemon Cache" check and only w
 fetched with at least one node, doctor adds one "Disk space" check built by a new function
 `diskSpaceDoctorCheck(nodes []models.NodeFacts) DoctorCheck`:
 
-1. A node has disk facts when its resources report `disk_total_gb > 0`. For each such node the free
-   share is `disk_free_gb / disk_total_gb`.
+1. A node has disk facts when its resources report `disk_total_gb > 0`; an unreachable node, and a
+   root under 1 GiB, have none. The collectors run `df -kP /` and round both fields down to whole
+   GiB, so each can be up to 1 GiB below the real value.
 2. A node is low when less than 10% of its root volume is free, and critically low when less than
-   3% is free. The comparisons are exact (`free*100 < 10*total`), not on a rounded percentage.
+   3% is free, judged so that rounding cannot raise a false warning: low only when
+   `(free+1)*100 < 10*total`, critically low only when `(free+1)*100 < 3*total`. The real share is
+   below `(free+1)/total`, so a listed node is below the threshold; a small volume just under it may
+   go unlisted.
 3. With no low node, the status is `pass` and the message says how many nodes were checked and
    names the nodes without disk facts, for example `10 of 11 nodes have at least 10% free on their
    root volume; no disk facts for node-c`.
 4. With low nodes, the status is `warn`. The message lists each low node, lowest free share first,
    as `<node> <free> of <total> GB free (<p>%)`, adding `, critically low` below 3%, and names the
-   nodes without disk facts. The fix line says `free space on the root volume of the listed nodes;
+   nodes without disk facts; nodes with the same free share are listed by name. The fix line says `free space on the root volume of the listed nodes;
    axis status --format json lists each node's volumes`.
 5. With no node that has disk facts, the status is `warn` with `no disk facts in the snapshot`,
    since the check could not run.
@@ -48,14 +53,17 @@ The check reads only the cached snapshot, so it reflects facts as of the last da
 Tests (`cmd/axis/doctor_disk_test.go`), table-driven on `diskSpaceDoctorCheck`:
 
 - every node at or above 10% free passes, and the message counts them;
-- a node just below 10% warns and one exactly at 10% passes;
-- a node below 3% is called critically low, and one exactly at 3% is not;
-- several low nodes are listed lowest free share first;
+- a node whose share is below 10% even after rounding warns, one at the edge of rounding
+  (total 15, free 1, which may be 13% free) passes, and one exactly at 10% passes;
+- a node below 3% after rounding is called critically low, and one at 3% is not;
+- several low nodes are listed lowest free share first, and two with the same share by name;
 - nodes with no resources, or a zero total, are named as having no disk facts and do not fail the
   check by themselves;
 - no node with disk facts warns with "no disk facts in the snapshot";
-- `runDoctor` includes the check when the daemon snapshot has nodes and omits it when the daemon is
-  unreachable (through the existing daemon fetch seam).
+- `runDoctor`, through the existing `fetchStatusSnapshot` seam, includes the check when the snapshot
+  has nodes, omits it when the daemon is unreachable or the snapshot has no nodes, and with a node at
+  2% free reports the check as `warn` while `--strict` still returns no error when nothing else
+  fails.
 
 ## Alternatives
 
