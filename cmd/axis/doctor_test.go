@@ -126,7 +126,7 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{
-			Nodes: []models.NodeFacts{{Name: "alpha"}},
+			Nodes: []models.NodeFacts{{Name: "alpha", Resources: &models.Resources{DiskTotalGB: 100, DiskFreeGB: 50}}},
 		}, "cached", nil
 	})
 	defer restoreCache()
@@ -349,7 +349,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 		return "SHELL=/bin/bash; bare session 5ms", false
 	}
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
-		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n"}}}, "cached", nil
+		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n", Resources: &models.Resources{DiskTotalGB: 100, DiskFreeGB: 50}}}}, "cached", nil
 	})
 	restoreOllama := stubDoctorOllama(t, func(context.Context) doctorBackendStatus {
 		return doctorBackendStatus{Installed: false}
