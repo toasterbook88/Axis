@@ -1,3 +1,38 @@
+## v0.27.1 (2026-11-20)
+
+`axis capability` refuses journal entries from checkers Axis does not have, and
+checks of a named machine no longer run locally because its name shares this
+machine's first label.
+
+### Fixes
+
+* `axis capability`: a journal entry that claims to come from Axis's own
+  checker must name one of them (`facts.hardware` or `facts.gpu`, with or
+  without `--node`). An entry appended by hand under an invented checker name
+  used to count once the state caught up, and `verify` still passed; journal
+  validation and `RecordCheck` now reject it, and existing records stay valid.
+  The spec and the `verify` help now say that one appended well-formed entry
+  is enough to forge a record, which stays outside what `verify` can detect
+  (#671).
+* `axis capability check --node`: a node counted as this machine when its name
+  or hostname shared only the first label, so `alpha.remote.example` was
+  probed locally from a machine named `alpha`. Matching now follows the rule
+  `axis ai route` uses: a bare name matches the short hostname, a qualified
+  one only the full hostname (#671).
+
+### Documentation
+
+* README, `SECURITY.md` and the release notes name v0.27.0, with a v0.27.0
+  upgrade guide; `CONTRIBUTING.md` no longer asks for generated facts that
+  compare the version with the previous tag, which the repo-truth gate
+  forbids (#670).
+
+### Tests
+
+* The agent approval-wait test sleeps long enough to pass on a busy
+  race-detector runner, and a fake-clock test covers overlapping waits without
+  sleeping (#672).
+
 ## v0.27.0 (2026-11-19)
 
 `axis agent --model` can use a model that a configured backend serves but no
