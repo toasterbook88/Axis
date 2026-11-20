@@ -95,3 +95,21 @@ Tests (`cmd/axis/doctor_disk_test.go`), table-driven on `diskSpaceDoctorCheck`:
 - Optimization: none needed; the check iterates the snapshot already in memory.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (same family as the author, so a fresh top-tier session rather than a cross-family review)
+Base: 79d66eb8534026af6872c121da5fa707e359a8a9
+Head: e83d5f00af2197dc79fde025b7a51211c91ed6c0
+Date: 2026-11-20
+Verdict: approve-with-changes
+
+1. Minor: the "exact" comparison runs on values the collectors already rounded down to whole GiB (`df -kP /` integer-divided), so a small root volume could be listed as low or critically low while above the threshold. Fixed in f84a0bc2: Design steps 1 and 2 state the rounding and judge a node low only when `(free+1)*100 < 10*total` (critically low with 3), which no rounding can make false; the test list adds the edge case total 15, free 1.
+
+2. Minor: the test list missed the reachable 0-node snapshot, where the check must be omitted, and that a warning leaves `--strict` returning no error. Fixed in f84a0bc2: both are in the `runDoctor` test item.
+
+Questions:
+
+- How are low nodes with the same free share ordered? Became part of the design: Design step 4 orders them by name, and the test list covers two equal shares.
+- Do the cited thresholds match upstream? Verified: on 2026-11-20 the Kubernetes node-pressure eviction page listed `nodefs.available<10%` among the kubelet's default hard eviction thresholds, and node_exporter's `docs/node-mixin/config.libsonnet` on master set `fsSpaceAvailableWarningThreshold: 5` and `fsSpaceAvailableCriticalThreshold: 3`.
+- Does the live measurement hold, including under the rounding rule? Verified: `axis status --format json` on 2026-11-20 gave two root volumes at 5 of 228 GB and 11 of 460 GB free, both critically low under the rounding-safe rule (600 < 684 and 1200 < 1380), one at 52 of 453 GB that is not low (5300 is not below 4530), and one node with no disk facts.
