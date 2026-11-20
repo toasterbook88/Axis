@@ -18,9 +18,11 @@ const (
 
 // diskSpaceDoctorCheck warns about nodes whose root volume is nearly full,
 // from the disk facts already in the snapshot. The collectors round both
-// figures down to whole GiB, so a node is listed only when its share stays
-// below the threshold with up to a whole GiB added to its free space: a listed
-// node is really low, and a small volume just under the line may go unlisted.
+// figures down to whole GiB, so the real share is below (free+1)/total and at
+// most that bound is compared with the threshold: a listed node is really
+// below it, and a volume within a GiB of the line may go unlisted. A node the
+// snapshot marks unreachable or errored has no current disk facts, whatever
+// its resources still hold.
 func diskSpaceDoctorCheck(nodes []models.NodeFacts) DoctorCheck {
 	type lowNode struct {
 		name        string
@@ -31,15 +33,16 @@ func diskSpaceDoctorCheck(nodes []models.NodeFacts) DoctorCheck {
 	var noFacts []string
 	checked := 0
 	for _, n := range nodes {
-		if n.Resources == nil || n.Resources.DiskTotalGB <= 0 {
+		if n.Status == models.StatusUnreachable || n.Status == models.StatusError ||
+			n.Resources == nil || n.Resources.DiskTotalGB <= 0 {
 			noFacts = append(noFacts, n.Name)
 			continue
 		}
 		checked++
 		free, total := max(n.Resources.DiskFreeGB, 0), n.Resources.DiskTotalGB
-		if (free+1)*100 < diskLowPercent*total {
+		if (free+1)*100 <= diskLowPercent*total {
 			lows = append(lows, lowNode{name: n.Name, free: free, total: total,
-				critical: (free+1)*100 < diskCriticalPercent*total})
+				critical: (free+1)*100 <= diskCriticalPercent*total})
 		}
 	}
 	sort.Strings(noFacts)
@@ -49,7 +52,7 @@ func diskSpaceDoctorCheck(nodes []models.NodeFacts) DoctorCheck {
 	}
 	if checked == 0 {
 		return DoctorCheck{Name: "Disk space", Status: "warn", Message: "no disk facts in the snapshot",
-			Fix: "run axis status to refresh the snapshot"}
+			Fix: "run axis daemon refresh, then axis doctor"}
 	}
 	if len(lows) == 0 {
 		return DoctorCheck{Name: "Disk space", Status: "pass",
