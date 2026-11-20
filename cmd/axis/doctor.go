@@ -536,6 +536,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 				Status:  "pass",
 				Message: fmt.Sprintf("Reachable, %d node(s) cached", len(snap.Nodes)),
 			})
+			checks = append(checks, diskSpaceDoctorCheck(snap.Nodes))
 		}
 	}
 	// Metadata is independent of the snapshot: a daemon can be reachable with
