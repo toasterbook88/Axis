@@ -446,10 +446,10 @@ func TestToolCall_SafetyApprovalIsolationAndRefusals(t *testing.T) {
 
 	// Unlisted MCP tool triggers unratedMCPWhy prompt for exact target, caches sessionApproved[target] only,
 	// excludes confirm sleep from timedDispatch elapsed time, and logs target tool approval.
-	// The confirm sleep is long so the dispatch's own work, which can take tens
-	// of milliseconds under -race on a busy runner, stays far below the bound,
-	// while a wait that was not excluded (or less than half excluded) still fails.
-	confirmDelay = 400 * time.Millisecond
+	// Sleep long enough that dispatch work under -race on a busy runner stays well
+	// below confirmDelay/2 (400ms was flaky on main after #669). Hermetic exclusion
+	// math lives in TestApprovalWait_OverlappingWaitsCountOnce.
+	confirmDelay = 2 * time.Second
 	_, elapsed, err := a.timedDispatch(context.Background(), toolCall("c-mcp-1", toolCallName, `{"name":"mcp_gadget_forget_memory","arguments":{}}`))
 	if err != nil {
 		t.Fatalf("timedDispatch unlisted MCP: %v", err)
