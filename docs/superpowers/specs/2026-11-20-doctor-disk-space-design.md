@@ -38,8 +38,9 @@ fetched with at least one node, doctor adds one "Disk space" check built by a ne
    below `(free+1)/total`, so a listed node is below the threshold; a small volume just under it may
    go unlisted.
 3. With no low node, the status is `pass` and the message says how many nodes were checked and
-   names the nodes without disk facts, for example `10 of 11 nodes have at least 10% free on their
-   root volume; no disk facts for node-c`.
+   names the nodes without disk facts, for example `none of 10 node(s) with disk facts is below 10%
+   free on its root volume; no disk facts for node-c` (worded "none below", since a node at the
+   rounding edge is not listed).
 4. With low nodes, the status is `warn`. The message lists each low node, lowest free share first,
    as `<node> <free> of <total> GB free (<p>%)`, adding `, critically low` below 3%, and names the
    nodes without disk facts; nodes with the same free share are listed by name. The fix line says `free space on the root volume of the listed nodes;

@@ -28,7 +28,7 @@ func healthyDoctorEnv(t *testing.T) {
 	}))
 	t.Cleanup(stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil }))
 	t.Cleanup(stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
-		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "alpha"}}}, "", nil
+		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "alpha", Resources: &models.Resources{DiskTotalGB: 100, DiskFreeGB: 50}}}}, "", nil
 	}))
 }
 
