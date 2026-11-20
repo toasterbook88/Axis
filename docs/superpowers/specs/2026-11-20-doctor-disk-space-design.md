@@ -118,3 +118,26 @@ Questions:
 - How are low nodes with the same free share ordered? Became part of the design: Design step 4 orders them by name, and the test list covers two equal shares.
 - Do the cited thresholds match upstream? Verified: on 2026-11-20 the Kubernetes node-pressure eviction page listed `nodefs.available<10%` among the kubelet's default hard eviction thresholds, and node_exporter's `docs/node-mixin/config.libsonnet` on master set `fsSpaceAvailableWarningThreshold: 5` and `fsSpaceAvailableCriticalThreshold: 3`.
 - Does the live measurement hold, including under the rounding rule? Verified: `axis status --format json` on 2026-11-20 gave two root volumes at 5 of 228 GB and 11 of 460 GB free, both critically low under the rounding-safe rule (600 < 684 and 1200 < 1380), one at 52 of 453 GB that is not low (5300 is not below 4530), and one node with no disk facts.
+
+Kind: diff
+Reviewer: fresh-context session (Claude Code `claude -p`, new session on another machine, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (a fresh session of the authoring model's family)
+Base: 79d66eb8534026af6872c121da5fa707e359a8a9
+Head: 57633926191a4c36fd1fa1cfb670ead3c0cca67b
+Date: 2026-11-20
+Verdict: approve-with-changes
+
+1. Minor: the rounding-safe rules used `<` where `<=` is just as safe, so a node certainly below the line (9 of 100 GB free) passed and 2 of 100 GB was not called critically low. Fixed in b7c431f1: both comparisons use `<=` in code and in Design step 2; tests cover {9, 100} as low and {2, 100} as critically low.
+
+2. Minor: no test pinned the rounding-safe critical rule against the naive one. Fixed in b7c431f1: {1, 40} must be low but not critical, which the naive rule gets wrong; the mutant now fails.
+
+3. Minor: the no-facts fix line said `axis status`, which does not refresh the daemon snapshot doctor reads. Fixed in b7c431f1: it says `run axis daemon refresh, then axis doctor`, and Design step 5 records it.
+
+4. Minor: the spec status line still said "No code yet". Fixed in b7c431f1.
+
+Questions:
+
+- Can an unreachable node carry stale non-zero disk fields? Became part of the design: `internal/facts/remote.go` returns no resources when the connection fails, but a fact bundle that times out after connecting can leave partial resources, so Design step 1 and the code now treat any node marked unreachable or errored as having no disk facts, whatever its resources hold; a test covers both statuses.
+- Should doctor report the snapshot's age? Open: doctor has never shown it, the behaviour predates this change, and this spec keeps doctor's existing snapshot handling.
+
+Note: one diff review is required, for about 80 changed non-test `.go` lines, all in `cmd/axis`.
