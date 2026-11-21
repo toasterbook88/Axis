@@ -195,3 +195,7 @@ Every PR, feature or exempt: resolve each review finding, review-bot findings in
 finding, `verified: <how>` or `open: <why not probed>`; list declines and open questions in the PR
 body. Do not merge while a requested review is pending: `hack/pr-review-cycle.sh` waits for requested
 reviews and exits 3 while one is still pending. An empty `reviewRequests` list alone is not proof.
+
+## Known model bounds
+
+swiftsmith-7b GGUF under the standard Qwen chat template and official sampler (temperature 0.7, top_p 0.8, top_k 20, repetition_penalty 1.1) produces zero parseable Swift functions on a trivial `public func add(a: Int, b: Int) -> Int` prompt (0/8). Early stops under temperature 0 are a separate ChatML EOS preference and are not the cause of the content failure.
