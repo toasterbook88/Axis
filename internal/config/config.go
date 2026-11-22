@@ -5,10 +5,13 @@ package config
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -334,13 +337,64 @@ type MCPServerConfig struct {
 	URL string `json:"url,omitempty" yaml:"url,omitempty"`
 
 	// Headers are optional HTTP headers (for http transport).
+	// Header values may reference environment variables as ${VAR}.
 	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+
+	// BearerTokenEnv is the environment variable that holds a Bearer token
+	// for http transport, resolved at connect time via internal/secrets.
+	BearerTokenEnv string `json:"bearer_token_env,omitempty" yaml:"bearer_token_env,omitempty"`
+
+	// BearerTokenFile is an optional file path fallback for the Bearer token
+	// when BearerTokenEnv is unset or empty, resolved via internal/secrets.
+	BearerTokenFile string `json:"bearer_token_file,omitempty" yaml:"bearer_token_file,omitempty"`
+
+	// TLSCertFingerprint pins the peer leaf certificate by its SHA-256 hex
+	// digest (64 hex chars, case-insensitive, optional sha256: prefix and
+	// colon separators) for self-signed https endpoints.
+	TLSCertFingerprint string `json:"tls_cert_fingerprint,omitempty" yaml:"tls_cert_fingerprint,omitempty"`
 
 	// AutoApproveTools lists this server's tools, by exact name as the server
 	// reports them, that axis agent may call without operator confirmation.
 	// Every other tool from the server asks first. Tool names, descriptions
 	// and annotations come from the server and are never trusted for this.
 	AutoApproveTools []string `json:"auto_approve_tools,omitempty" yaml:"auto_approve_tools,omitempty"`
+}
+
+var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ParseTLSCertFingerprint parses a SHA-256 certificate fingerprint string into
+// a 32-byte digest. It trims surrounding whitespace, strips an optional
+// case-insensitive "sha256:" prefix, and accepts either 64 contiguous hex
+// digits or colon-separated hex groups with no leading, trailing, or empty
+// segments.
+func ParseTLSCertFingerprint(raw string) ([32]byte, error) {
+	var zero [32]byte
+	s := strings.TrimSpace(raw)
+	if len(s) >= len("sha256:") && strings.EqualFold(s[:len("sha256:")], "sha256:") {
+		s = strings.TrimSpace(s[len("sha256:"):])
+	}
+	if s == "" {
+		return zero, fmt.Errorf("tls_cert_fingerprint is empty")
+	}
+	if strings.Contains(s, ":") {
+		parts := strings.Split(s, ":")
+		for _, p := range parts {
+			if p == "" {
+				return zero, fmt.Errorf("tls_cert_fingerprint has malformed colon separators")
+			}
+		}
+		s = strings.Join(parts, "")
+	}
+	if len(s) != sha256.Size*2 {
+		return zero, fmt.Errorf("tls_cert_fingerprint must be 64 hex characters (got %d)", len(s))
+	}
+	decoded, err := hex.DecodeString(s)
+	if err != nil {
+		return zero, fmt.Errorf("tls_cert_fingerprint contains invalid hex: %w", err)
+	}
+	var out [32]byte
+	copy(out[:], decoded)
+	return out, nil
 }
 
 // AutoApproves reports whether tool is listed in AutoApproveTools.
@@ -596,6 +650,57 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if err := validateMCPServers(c.MCPServers); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateMCPServers(servers map[string]MCPServerConfig) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		srv := servers[name]
+		isHTTP := strings.EqualFold(strings.TrimSpace(srv.Transport), "http")
+
+		if strings.TrimSpace(srv.TLSCertFingerprint) != "" {
+			if _, err := ParseTLSCertFingerprint(srv.TLSCertFingerprint); err != nil {
+				return fmt.Errorf("config: mcp_servers.%s: %w", name, err)
+			}
+			if !isHTTP {
+				return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires http transport", name)
+			}
+			if strings.TrimSpace(srv.URL) != "" {
+				parsed, err := url.Parse(srv.URL)
+				if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+					return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires an https URL", name)
+				}
+			}
+		}
+
+		if srv.BearerTokenEnv != "" && !envVarNameRe.MatchString(srv.BearerTokenEnv) {
+			return fmt.Errorf("config: mcp_servers.%s: invalid bearer_token_env %q", name, srv.BearerTokenEnv)
+		}
+
+		if srv.BearerTokenEnv != "" || strings.TrimSpace(srv.BearerTokenFile) != "" {
+			if !isHTTP {
+				return fmt.Errorf("config: mcp_servers.%s: bearer_token_env/bearer_token_file requires http transport", name)
+			}
+			for hk := range srv.Headers {
+				if strings.EqualFold(strings.TrimSpace(hk), "authorization") {
+					return fmt.Errorf("config: mcp_servers.%s: cannot set both bearer_token_env/bearer_token_file and Authorization header", name)
+				}
+			}
+		}
+	}
 	return nil
 }
 

@@ -117,7 +117,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | `axis task` | `place`, `context`, `run` |
 | `axis placement explain` | Per-node placement breakdown |
 | `axis profile match` | Workload class inference |
-| `axis mcp serve` | MCP server over stdio |
+| `axis mcp serve` | MCP server over stdio or Streamable HTTP (`/mcp`) |
 | `axis serve` | HTTP API + daemon cache |
 | `axis daemon` | Lifecycle, cache, `service install/status/uninstall` |
 | `axis chat` | Removed; prints `use axis agent` |

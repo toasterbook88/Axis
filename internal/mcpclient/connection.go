@@ -3,9 +3,17 @@ package mcpclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/netutil"
+	"github.com/toasterbook88/axis/internal/secrets"
 )
 
 // ServerConnection holds the state of a single MCP server connection.
@@ -181,11 +190,20 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
 
-	opts := []transport.StreamableHTTPCOption{
-		transport.WithHTTPBasicClient(newMCPHTTPClient()),
+	httpClient, err := NewHTTPClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
-	if len(cfg.Headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+	headers, err := ResolveHeaders(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
+	}
+
+	opts := []transport.StreamableHTTPCOption{
+		transport.WithHTTPBasicClient(httpClient),
+	}
+	if len(headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(headers))
 	}
 
 	client, err := mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
@@ -198,6 +216,123 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 
 // maxMCPRedirects is Go's default redirect limit, kept by newMCPHTTPClient.
 const maxMCPRedirects = 10
+
+var headerEnvVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// NewHTTPClient constructs the HTTP client for streamable MCP connections.
+// It enforces the same-origin redirect policy and, when cfg.TLSCertFingerprint
+// is set, configures TLS leaf certificate SHA-256 pinning for https endpoints.
+func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
+	client := newMCPHTTPClient()
+
+	if strings.TrimSpace(cfg.TLSCertFingerprint) == "" {
+		return client, nil
+	}
+
+	parsed, err := url.Parse(cfg.URL)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, fmt.Errorf("tls_cert_fingerprint requires an https URL")
+	}
+	expected, err := config.ParseTLSCertFingerprint(cfg.TLSCertFingerprint)
+	if err != nil {
+		return nil, err
+	}
+
+	tr := &http.Transport{}
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = defaults.Clone()
+	}
+	tr.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		// InsecureSkipVerify bypasses system CA chain validation for self-signed
+		// local certificates; authenticity is enforced strictly by
+		// VerifyPeerCertificate pinning the leaf DER SHA-256 digest below.
+		InsecureSkipVerify: true, //nolint:gosec
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
+			}
+			if _, err := x509.ParseCertificate(rawCerts[0]); err != nil {
+				return fmt.Errorf("tls pin verification failed: invalid leaf certificate: %w", err)
+			}
+			sum := sha256.Sum256(rawCerts[0])
+			if subtle.ConstantTimeCompare(sum[:], expected[:]) != 1 {
+				return fmt.Errorf("tls certificate fingerprint mismatch")
+			}
+			return nil
+		},
+	}
+	client.Transport = tr
+	return client, nil
+}
+
+// ResolveHeaders returns a fresh HTTP header map for cfg without mutating
+// cfg.Headers. It performs single-pass ${VAR} expansion on raw header templates
+// and resolves BearerTokenEnv / BearerTokenFile via internal/secrets.
+func ResolveHeaders(cfg config.MCPServerConfig) (map[string]string, error) {
+	hasBearer := cfg.BearerTokenEnv != "" || strings.TrimSpace(cfg.BearerTokenFile) != ""
+	if len(cfg.Headers) == 0 && !hasBearer {
+		return nil, nil
+	}
+
+	resolved := make(map[string]string, len(cfg.Headers)+1)
+	for k, v := range cfg.Headers {
+		if hasBearer && strings.EqualFold(strings.TrimSpace(k), "authorization") {
+			return nil, fmt.Errorf("cannot set both bearer_token_env/bearer_token_file and Authorization header")
+		}
+		expanded, err := expandHeaderEnv(v)
+		if err != nil {
+			return nil, fmt.Errorf("header %q: %w", k, err)
+		}
+		resolved[k] = expanded
+	}
+
+	if hasBearer {
+		token, err := secrets.Resolve(cfg.BearerTokenEnv, cfg.BearerTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve bearer token: %w", err)
+		}
+		resolved["Authorization"] = "Bearer " + token
+	}
+
+	return resolved, nil
+}
+
+// expandHeaderEnv expands ${VAR} placeholders in a single pass over raw without
+// re-scanning substituted values.
+func expandHeaderEnv(raw string) (string, error) {
+	if !strings.Contains(raw, "${") {
+		return raw, nil
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	i := 0
+	for i < len(raw) {
+		idx := strings.Index(raw[i:], "${")
+		if idx < 0 {
+			b.WriteString(raw[i:])
+			break
+		}
+		b.WriteString(raw[i : i+idx])
+		start := i + idx + 2
+		endRel := strings.IndexByte(raw[start:], '}')
+		if endRel < 0 {
+			return "", fmt.Errorf("unclosed env placeholder in header value")
+		}
+		name := raw[start : start+endRel]
+		if !headerEnvVarNameRe.MatchString(name) {
+			return "", fmt.Errorf("invalid env placeholder %q in header value", name)
+		}
+		val, ok := os.LookupEnv(name)
+		trimmed := strings.TrimSpace(val)
+		if !ok || trimmed == "" {
+			return "", fmt.Errorf("environment variable %q is unset or empty", name)
+		}
+		b.WriteString(trimmed)
+		i = start + endRel + 1
+	}
+	return b.String(), nil
+}
 
 // newMCPHTTPClient is the HTTP client for streamable MCP connections. It
 // follows a redirect only to the origin (scheme and host) of the first
