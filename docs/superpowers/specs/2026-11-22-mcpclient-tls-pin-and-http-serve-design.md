@@ -1,6 +1,6 @@
 # `mcpclient` TLS certificate pinning, secret header resolution, and Streamable HTTP `axis mcp serve`
 
-Date: 2026-11-22. Status: spec reviewed (`approve-with-changes`, all findings resolved below); implementing on `feat/mcpclient-tls-pin-and-http-serve`.
+Date: 2026-11-22. Status: implemented on `feat/mcpclient-tls-pin-and-http-serve`; spec review and both independent diff reviews `approve-with-changes`, all findings resolved below.
 
 ## Problem
 
@@ -78,15 +78,14 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - Retains `netutil.ValidateOutboundURL(cfg.URL)` unchanged.
   - Calls `NewHTTPClient(cfg)` and `ResolveHeaders(cfg)` before constructing `mcpclient.NewStreamableHttpClient`.
 
-### 3. Streamable HTTP transport for `axis mcp serve` (`internal/mcp/server.go`, `cmd/axis/mcp.go`)
+### 3. Streamable HTTP transport for `axis mcp serve` (`internal/mcp/http.go`, `cmd/axis/mcp.go`)
 
-- In `internal/mcp/server.go`:
-  - Internal helper `newStreamableHTTP(cached bool, cacheAddr string, token string) (http.Handler, *mcpserver.StreamableHTTPServer)` creates `mcpSrv := NewServer(cached, cacheAddr, nil)` and `streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)` (omitting the no-op `WithEndpointPath` option) and mounts `streamSrv` at `/mcp` on a dedicated `http.ServeMux`. `mcp-go`'s default loopback DNS-rebinding check remains enabled.
+- In `internal/mcp/http.go`:
+  - Internal helper `newStreamableHTTP(cached bool, cacheAddr string, token string) (http.Handler, *mcpserver.StreamableHTTPServer)` creates `mcpSrv := NewServer(cached, cacheAddr, nil)` and `streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)` (omitting the no-op `WithEndpointPath` option) and mounts `streamSrv` at `/mcp` on a dedicated `http.ServeMux`. `mcp-go`'s default loopback DNS-rebinding check remains enabled. (Keeping `newStreamableHTTP` unexported avoids adding an unreachable exported symbol to `hack/deadcode-allowlist.txt`.)
   - When `token != ""`, a middleware checks `Authorization` using `strings.Fields` and case-insensitive `strings.EqualFold(parts[0], "bearer")` (matching `internal/api/server.go`) plus `subtle.ConstantTimeCompare` against `token`; missing or wrong credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`.
-  - Exported `NewStreamableHTTPHandler(cached bool, cacheAddr string, token string) http.Handler` returns the handler for testing and composition.
   - `ServeStreamableHTTP(ctx context.Context, addr string, cached bool, cacheAddr string, tokenEnv string) error`:
     - Validates `addr` with `net.SplitHostPort`.
-    - When `tokenEnv != ""`, resolves the bearer token via `secrets.Resolve(tokenEnv, "")` and fails closed if unset or empty.
+    - When `tokenEnv != ""`, rejects whitespace-only names and resolves the bearer token via `secrets.Resolve(strings.TrimSpace(tokenEnv), "")`, failing closed if unset or empty.
     - Refuses to bind a non-loopback host (`host` not `"localhost"` and not a loopback IP) unless `token != ""` (fail closed against accidental unauthenticated LAN/wildcard exposure).
     - Runs `http.Server` (`ReadHeaderTimeout: 10 * time.Second`) on a `net.Listen("tcp", addr)` listener. When `ctx` is canceled, runs a bounded 5-second drain calling `streamSrv.CloseSessions(drainCtx)` to release active SSE `GET /mcp` streams alongside `srv.Shutdown(drainCtx)`, falling back to `srv.Close()` if shutdown still blocks.
 - In `cmd/axis/mcp.go`:
@@ -105,11 +104,12 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - Self-signed `httptest.NewTLSServer` fails without pin, succeeds with matching `tls_cert_fingerprint` (including colon-separated / `sha256:` formats), and fails with wrong pin.
   - Rejects `tls_cert_fingerprint` on `http://` URL.
   - Preserves cross-origin and scheme-downgrade redirect blocking when TLS pin is active.
-  - `ResolveHeaders`: expands `${VAR}` in a single pass without mutating `cfg.Headers`, trims whitespace, succeeds when the env var's value itself contains literal `${`, fails closed on unset/blank `${VAR}` and malformed `${...}`; resolves `bearer_token_env` and `bearer_token_file` via `secrets.Resolve`; rejects conflicting `Authorization` header; end-to-end `connectHTTP` over pinned TLS + `bearer_token_env` against an in-process `NewStreamableHTTPHandler` MCP server.
+  - `ResolveHeaders`: expands `${VAR}` in a single pass without mutating `cfg.Headers`, trims whitespace, succeeds when the env var's value itself contains literal `${`, fails closed on unset/blank `${VAR}`, whitespace-only `bearer_token_file`/`tls_cert_fingerprint`, and malformed `${...}`; resolves `bearer_token_env` and `bearer_token_file` via `secrets.Resolve`; rejects conflicting `Authorization` header; end-to-end `connectHTTP` over pinned TLS + `bearer_token_env` against an in-process Streamable HTTP MCP server.
 - `internal/mcp/http_test.go`:
-  - Streamable HTTP `/mcp` initialize + `tools/list` (verifying 21 tools) over `httptest.NewServer(NewStreamableHTTPHandler(...))`.
+  - Streamable HTTP `/mcp` initialize + `tools/list` (verifying 21 tools) over `httptest.NewServer` backed by `newStreamableHTTP`.
   - Bearer auth middleware: rejects missing/wrong token with 401 and accepts matching token (including case-insensitive `bearer` scheme).
-  - `ServeStreamableHTTP`: refuses non-loopback `--addr` without `--token-env`; fails closed when `--token-env` is unset; binds loopback `127.0.0.1:0` and shuts down cleanly on context cancel even while a client holds an active `GET /mcp` SSE stream open.
+  - End-to-end `mcpclient.Registry.ConnectAll` over pinned self-signed TLS + `bearer_token_env` against `newStreamableHTTP` (verifying 21 tools).
+  - `ServeStreamableHTTP`: refuses non-loopback `--addr` without `--token-env`; fails closed when `--token-env` is unset or whitespace-only; succeeds on loopback `127.0.0.1:0` with valid `--token-env` and shuts down cleanly on context cancel, including while a client holds an active `GET /mcp` SSE stream open.
 - `cmd/axis/command_surface_test.go`:
   - Update unsupported-transport test (`--transport sse`) and add tests verifying `axis mcp serve --transport http --addr ... --token-env ...` invokes `serveMCPHTTP`.
 - `internal/agent/mcp_approval_test.go`:

@@ -161,6 +161,26 @@ mcp_servers:
 			wantErr: "requires http transport",
 		},
 		{
+			name: "whitespace-only fingerprint",
+			snippet: `mcp_servers:
+  bad:
+    transport: stdio
+    command: ["echo"]
+    tls_cert_fingerprint: "   "
+`,
+			wantErr: "tls_cert_fingerprint is empty",
+		},
+		{
+			name: "whitespace-only bearer_token_file",
+			snippet: `mcp_servers:
+  bad:
+    transport: stdio
+    command: ["echo"]
+    bearer_token_file: "   "
+`,
+			wantErr: "bearer_token_file cannot be whitespace-only",
+		},
+		{
 			name: "conflicting Authorization header and bearer_token_env",
 			snippet: `mcp_servers:
   bad:

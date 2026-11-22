@@ -671,7 +671,7 @@ func validateMCPServers(servers map[string]MCPServerConfig) error {
 		srv := servers[name]
 		isHTTP := strings.EqualFold(strings.TrimSpace(srv.Transport), "http")
 
-		if strings.TrimSpace(srv.TLSCertFingerprint) != "" {
+		if srv.TLSCertFingerprint != "" {
 			if _, err := ParseTLSCertFingerprint(srv.TLSCertFingerprint); err != nil {
 				return fmt.Errorf("config: mcp_servers.%s: %w", name, err)
 			}
@@ -689,8 +689,11 @@ func validateMCPServers(servers map[string]MCPServerConfig) error {
 		if srv.BearerTokenEnv != "" && !envVarNameRe.MatchString(srv.BearerTokenEnv) {
 			return fmt.Errorf("config: mcp_servers.%s: invalid bearer_token_env %q", name, srv.BearerTokenEnv)
 		}
+		if srv.BearerTokenFile != "" && strings.TrimSpace(srv.BearerTokenFile) == "" {
+			return fmt.Errorf("config: mcp_servers.%s: bearer_token_file cannot be whitespace-only", name)
+		}
 
-		if srv.BearerTokenEnv != "" || strings.TrimSpace(srv.BearerTokenFile) != "" {
+		if srv.BearerTokenEnv != "" || srv.BearerTokenFile != "" {
 			if !isHTTP {
 				return fmt.Errorf("config: mcp_servers.%s: bearer_token_env/bearer_token_file requires http transport", name)
 			}

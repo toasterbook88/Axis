@@ -225,7 +225,7 @@ var headerEnvVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 	client := newMCPHTTPClient()
 
-	if strings.TrimSpace(cfg.TLSCertFingerprint) == "" {
+	if cfg.TLSCertFingerprint == "" {
 		return client, nil
 	}
 
@@ -270,9 +270,12 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 // cfg.Headers. It performs single-pass ${VAR} expansion on raw header templates
 // and resolves BearerTokenEnv / BearerTokenFile via internal/secrets.
 func ResolveHeaders(cfg config.MCPServerConfig) (map[string]string, error) {
-	hasBearer := cfg.BearerTokenEnv != "" || strings.TrimSpace(cfg.BearerTokenFile) != ""
+	hasBearer := cfg.BearerTokenEnv != "" || cfg.BearerTokenFile != ""
 	if len(cfg.Headers) == 0 && !hasBearer {
 		return nil, nil
+	}
+	if cfg.BearerTokenFile != "" && strings.TrimSpace(cfg.BearerTokenFile) == "" {
+		return nil, fmt.Errorf("bearer_token_file cannot be whitespace-only")
 	}
 
 	resolved := make(map[string]string, len(cfg.Headers)+1)

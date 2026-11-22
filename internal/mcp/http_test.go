@@ -2,6 +2,8 @@ package axismcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +14,14 @@ import (
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
+	"github.com/toasterbook88/axis/internal/config"
+	axismcpclient "github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 func TestStreamableHTTPInitializeAndListTools(t *testing.T) {
-	srv := httptest.NewServer(NewStreamableHTTPHandler(false, "", ""))
+	h, _ := newStreamableHTTP(false, "", "")
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	client, err := mcpclient.NewStreamableHttpClient(srv.URL + "/mcp")
@@ -46,7 +52,8 @@ func TestStreamableHTTPInitializeAndListTools(t *testing.T) {
 
 func TestStreamableHTTPBearerAuthMiddleware(t *testing.T) {
 	const token = "axis-http-mcp-secret"
-	srv := httptest.NewServer(NewStreamableHTTPHandler(false, "", token))
+	h, _ := newStreamableHTTP(false, "", token)
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	// Missing Authorization header -> 401.
@@ -93,6 +100,47 @@ func TestStreamableHTTPBearerAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	netutil.AllowInternalHost("127.0.0.1")
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	const token = "axis-e2e-streamable-secret"
+	t.Setenv("TEST_AXIS_E2E_TOKEN", token)
+
+	h, _ := newStreamableHTTP(false, "", token)
+	tlsSrv := httptest.NewTLSServer(h)
+	defer tlsSrv.Close()
+
+	sum := sha256.Sum256(tlsSrv.TLS.Certificates[0].Certificate[0])
+	fp := "sha256:" + hex.EncodeToString(sum[:])
+
+	reg := axismcpclient.NewRegistry()
+	defer reg.Close()
+	reg.ConnectAll(context.Background(), &config.Config{
+		MCPServers: map[string]config.MCPServerConfig{
+			"axis_http": {
+				Transport:          "http",
+				URL:                tlsSrv.URL + "/mcp",
+				BearerTokenEnv:     "TEST_AXIS_E2E_TOKEN",
+				TLSCertFingerprint: fp,
+			},
+		},
+	})
+
+	sc := reg.Get("axis_http")
+	if sc == nil || !sc.Connected() {
+		var err error
+		if sc != nil {
+			err = sc.Err
+		}
+		t.Fatalf("expected axis_http connected over pinned TLS, err=%v", err)
+	}
+	if sc.ToolCount() != 21 {
+		t.Fatalf("ToolCount = %d, want 21", sc.ToolCount())
+	}
+}
+
 func TestServeStreamableHTTPGuards(t *testing.T) {
 	// Non-loopback without token is refused.
 	for _, addr := range []string{"0.0.0.0:42426", ":42426", "192.0.2.10:42426"} {
@@ -108,10 +156,26 @@ func TestServeStreamableHTTPGuards(t *testing.T) {
 		t.Fatalf("ServeStreamableHTTP unset token env = %v, want resolve error", err)
 	}
 
+	// Whitespace-only --token-env fails closed instead of serving unauthenticated.
+	err = ServeStreamableHTTP(context.Background(), "127.0.0.1:0", false, "", "   ")
+	if err == nil || !strings.Contains(err.Error(), "whitespace-only") {
+		t.Fatalf("ServeStreamableHTTP whitespace token env = %v, want whitespace-only error", err)
+	}
+
 	// Invalid listen address fails.
 	err = ServeStreamableHTTP(context.Background(), "not-host-port", false, "", "")
 	if err == nil || !strings.Contains(err.Error(), "invalid listen address") {
 		t.Fatalf("ServeStreamableHTTP invalid addr = %v, want invalid listen address", err)
+	}
+}
+
+func TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel(t *testing.T) {
+	t.Setenv("TEST_SERVE_MCP_HTTP_TOKEN", "loopback-secret")
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	if err := ServeStreamableHTTP(ctx, "127.0.0.1:0", false, "", "TEST_SERVE_MCP_HTTP_TOKEN"); err != nil {
+		t.Fatalf("ServeStreamableHTTP loopback with tokenEnv: %v", err)
 	}
 }
 

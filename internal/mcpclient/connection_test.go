@@ -269,9 +269,11 @@ func TestResolveHeaders(t *testing.T) {
 		}
 	})
 
-	t.Run("fails closed on unset or malformed placeholder", func(t *testing.T) {
+	t.Run("fails closed on unset, blank, or malformed placeholder", func(t *testing.T) {
+		t.Setenv("TEST_BLANK_MCP_VAR", "   \t  ")
 		for _, val := range []string{
 			"Bearer ${UNSET_MCP_VAR_12345}",
+			"Bearer ${TEST_BLANK_MCP_VAR}",
 			"Bearer ${UNCLOSED",
 			"Bearer ${BAD-NAME}",
 			"Bearer ${}",
@@ -282,6 +284,18 @@ func TestResolveHeaders(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ResolveHeaders(%q) succeeded, want error", val)
 			}
+		}
+	})
+
+	t.Run("fails closed on whitespace-only bearer_token_file and tls_cert_fingerprint", func(t *testing.T) {
+		if _, err := ResolveHeaders(config.MCPServerConfig{BearerTokenFile: "   "}); err == nil {
+			t.Fatal("ResolveHeaders with whitespace-only BearerTokenFile succeeded, want error")
+		}
+		if _, err := NewHTTPClient(config.MCPServerConfig{
+			URL:                "https://127.0.0.1:5648/mcp",
+			TLSCertFingerprint: "   ",
+		}); err == nil {
+			t.Fatal("NewHTTPClient with whitespace-only TLSCertFingerprint succeeded, want error")
 		}
 	})
 

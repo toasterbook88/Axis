@@ -33,14 +33,6 @@ func newStreamableHTTP(cached bool, cacheAddr string, token string) (http.Handle
 	return mux, streamSrv
 }
 
-// NewStreamableHTTPHandler returns an http.Handler serving the AXIS MCP server
-// over Streamable HTTP at /mcp. When token is non-empty, requests must supply
-// a matching Authorization: Bearer <token> header.
-func NewStreamableHTTPHandler(cached bool, cacheAddr string, token string) http.Handler {
-	h, _ := newStreamableHTTP(cached, cacheAddr, token)
-	return h
-}
-
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,8 +69,12 @@ func ServeStreamableHTTP(ctx context.Context, addr string, cached bool, cacheAdd
 	}
 
 	var token string
-	if strings.TrimSpace(tokenEnv) != "" {
-		resolved, err := secrets.Resolve(strings.TrimSpace(tokenEnv), "")
+	if tokenEnv != "" {
+		trimmedEnv := strings.TrimSpace(tokenEnv)
+		if trimmedEnv == "" {
+			return fmt.Errorf("resolve bearer token from env %q: env var name cannot be whitespace-only", tokenEnv)
+		}
+		resolved, err := secrets.Resolve(trimmedEnv, "")
 		if err != nil {
 			return fmt.Errorf("resolve bearer token from env %q: %w", tokenEnv, err)
 		}
