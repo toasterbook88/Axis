@@ -131,4 +131,22 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
 
 ## Review
 
-(Spec review record added in next commit referencing the fix SHA.)
+Kind: spec
+Reviewer: fresh-context subagent (Antigravity `self`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Google Gemini (same family as the author)
+Base: 340c1bc0da3a1065ed0d8ec7e77cc88735424b02
+Head: 5400baa54cfad0ecb85c69c364de2a69e06d31d3
+Date: 2026-11-22
+Verdict: approve-with-changes
+
+1. Major: `ServeStreamableHTTP` and `axis mcp serve --transport http` shutdown design missed `signal.NotifyContext` in `cmd/axis/mcp.go` and active SSE `GET /mcp` session teardown (`StreamableHTTPServer.CloseSessions`). Fixed in fae02803: wired `signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)` for `--transport http`, kept `*mcpserver.StreamableHTTPServer` accessible in `ServeStreamableHTTP` to call `CloseSessions` alongside `srv.Shutdown` with bounded drain + `srv.Close()` fallback, and added an active `GET /mcp` shutdown test.
+
+2. Major: `ResolveHeaders` post-substitution `${` check broke valid secret env values containing literal `${`. Fixed in fae02803: Design §2 now specifies single-pass parsing over the raw header template string without re-scanning substituted env values, and the test plan covers an env value containing `${`.
+
+3. Minor: Reverse-proxy non-goal overlooked `mcp-go`'s default loopback `Host`-header DNS-rebinding rejection and passed a no-op `WithEndpointPath("/mcp")` option when mounted on `http.ServeMux`. Fixed in fae02803: Non-goals and Design §3 state the reverse-proxy `Host` rewrite requirement and omit `WithEndpointPath`.
+
+4. Minor: Spec cited stale `29-command` count (current main has 30) and omitted updating `docs/current-state.md`. Fixed in fae02803: updated count to `30-command` and added the `docs/current-state.md` update to Design §3.
+
+Questions:
+
+- Should `NewStreamableHTTPHandler`'s bearer middleware accept case-insensitive `bearer` scheme matching `internal/api/server.go`, and should `${VAR}` header expansion trim surrounding whitespace? Verified: updated Design §2 and §3 in fae02803 so bearer auth uses `strings.Fields` + case-insensitive `bearer` matching `internal/api/server.go`, and `${VAR}` expansion trims surrounding whitespace matching `internal/secrets.Resolve`.
