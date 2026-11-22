@@ -150,3 +150,31 @@ Verdict: approve-with-changes
 Questions:
 
 - Should `NewStreamableHTTPHandler`'s bearer middleware accept case-insensitive `bearer` scheme matching `internal/api/server.go`, and should `${VAR}` header expansion trim surrounding whitespace? Verified: updated Design §2 and §3 in fae02803 so bearer auth uses `strings.Fields` + case-insensitive `bearer` matching `internal/api/server.go`, and `${VAR}` expansion trims surrounding whitespace matching `internal/secrets.Resolve`.
+
+Kind: diff
+Reviewer: fresh-context subagent A (Antigravity `self`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Google Gemini (same family as the author)
+Base: 340c1bc0da3a1065ed0d8ec7e77cc88735424b02
+Head: 4fa68502cb7f5932d5cd21a0b62ae0a642aa3536
+Date: 2026-11-22
+Verdict: approve-with-changes
+
+1. Blocker: exported `NewStreamableHTTPHandler` was unreachable from `cmd/axis` and failed `./hack/verify-deadcode.sh`. Fixed in b97c3eff: removed the exported wrapper and kept unexported `newStreamableHTTP` for `ServeStreamableHTTP` and package tests; `./hack/verify-deadcode.sh` passes with zero new allowlist entries.
+
+2. Minor: spec §3 cited `internal/mcp/server.go` instead of `internal/mcp/http.go`, `TestResolveHeaders` lacked a whitespace-only `${VAR}` test, and `ServeStreamableHTTP` happy path (`tokenEnv` + `net.Listen`) was uncovered. Fixed in b97c3eff: updated spec §3/§4 to `internal/mcp/http.go` and `newStreamableHTTP`, added a whitespace-only `${VAR}` case, added `TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel`, and added `TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS`.
+
+Kind: diff
+Reviewer: fresh-context subagent B (Antigravity `self`, independent fresh session given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Google Gemini (same family as the author)
+Base: 340c1bc0da3a1065ed0d8ec7e77cc88735424b02
+Head: 4fa68502cb7f5932d5cd21a0b62ae0a642aa3536
+Date: 2026-11-22
+Verdict: approve-with-changes
+
+1. Blocker: exported `NewStreamableHTTPHandler` failed `./hack/verify-deadcode.sh`. Fixed in b97c3eff: removed the redundant exported wrapper and updated spec §3/§4; deadcode gate passes.
+
+2. Minor: whitespace-only `tokenEnv`, `tls_cert_fingerprint`, and `bearer_token_file` bypassed fail-closed checks. Fixed in b97c3eff: gated presence checks on non-empty raw strings (`!= ""`) and explicitly rejected whitespace-only values across `internal/config/config.go`, `internal/mcpclient/connection.go`, and `internal/mcp/http.go`, with regression tests for all three.
+
+3. Minor: `ServeStreamableHTTP` happy path was uncovered and spec §3/§4 references drifted from `internal/mcp/http.go` and test wiring. Fixed in b97c3eff: added `TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel` and `TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS` and updated spec §3/§4 to match.
+
+Note: two independent diff reviews were run per AGENTS.md §8 step 4 (changes span 4 packages: `internal/config`, `internal/mcpclient`, `internal/mcp`, `cmd/axis`).
