@@ -1,6 +1,6 @@
 # `mcpclient` TLS certificate pinning, secret header resolution, and Streamable HTTP `axis mcp serve`
 
-Date: 2026-11-22. Status: draft spec for `feat/mcpclient-tls-pin-and-http-serve`; no feature code yet.
+Date: 2026-11-22. Status: spec reviewed (`approve-with-changes`, all findings resolved below); implementing on `feat/mcpclient-tls-pin-and-http-serve`.
 
 ## Problem
 
@@ -14,7 +14,7 @@ Three gaps block `axis` from interoperating securely over Streamable HTTP with l
 
 - No UDP multicast discovery, Bonjour/mDNS browsing, device pairing flows, or new top-level `axis app` CLI command. Those require a separate wire-protocol spec and public-boundary review.
 - No mounting `/mcp` onto `axis serve` (`:42425`); `axis mcp serve --transport http` runs as its own explicit command on a separate default loopback port (`127.0.0.1:42426`).
-- No TLS termination flags (`--tls-cert`/`--tls-key`) on `axis mcp serve --transport http`; operators needing TLS in front of `axis mcp serve` put a reverse proxy in front of loopback.
+- No TLS termination flags (`--tls-cert`/`--tls-key`) on `axis mcp serve --transport http`; operators placing a TLS reverse proxy in front of loopback must rewrite the forwarded `Host` header to `localhost` or `127.0.0.1` because `mcp-go`'s default loopback DNS-rebinding check remains enabled.
 - No changes to `axis doctor`'s `doctorProbeHTTP` signature or probe behavior in this change (separate follow-up if needed).
 - No change to `axis agent`'s external MCP approval contract: `internal/agent/tools_mcp.go` already enforces exact `auto_approve_tools` matching and ignores server-supplied tool annotations; this change only adds a regression test pinning that behavior for read-only vs write tools.
 - No writes to `~/.axis/nodes.yaml` or `~/.axis/ai.yaml`.
@@ -69,7 +69,7 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
       - `VerifyPeerCertificate`: rejects empty `rawCerts`, parses `rawCerts[0]` with `x509.ParseCertificate`, computes `sha256.Sum256(rawCerts[0])`, and compares against the expected digest with `subtle.ConstantTimeCompare`. Any mismatch fails the handshake with a descriptive error.
 - **`ResolveHeaders(cfg config.MCPServerConfig) (map[string]string, error)`:**
   - Never mutates `cfg.Headers`.
-  - Expands `${VAR}` tokens (matching `\$\{([A-Za-z_][A-Za-z0-9_]*)\}`) in header values via `os.LookupEnv`. If a referenced env var is unset or whitespace-only, returns an error naming the variable (never a secret value). If an unexpanded `${` remains after substitution (for example malformed `${BAD-NAME}` or unclosed `${VAR`), fails closed with a syntax error.
+  - Parses and expands `${VAR}` placeholders in a single pass over each raw header template string (never re-scanning substituted env values, so secrets containing literal `${` succeed). Whenever `${` appears in the raw template, it must close with `}` and contain a valid identifier matching `^[A-Za-z_][A-Za-z0-9_]*$`; malformed or unclosed `${...}` templates fail closed with a syntax error. Each referenced env var is looked up via `os.LookupEnv`, trimmed of surrounding whitespace (matching `internal/secrets.Resolve`), and rejected with an error naming only the variable if unset or whitespace-only.
   - If `cfg.BearerTokenEnv != ""` or `cfg.BearerTokenFile != ""`:
     - Rejects if `cfg.Headers` already has an `Authorization` key (case-insensitive).
     - Resolves via `internal/secrets.Resolve(cfg.BearerTokenEnv, cfg.BearerTokenFile)` and fails closed if not found or unreadable (never including any secret value in errors).
@@ -81,17 +81,20 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
 ### 3. Streamable HTTP transport for `axis mcp serve` (`internal/mcp/server.go`, `cmd/axis/mcp.go`)
 
 - In `internal/mcp/server.go`:
-  - `NewStreamableHTTPHandler(cached bool, cacheAddr string, token string) http.Handler` wraps `mcpserver.NewStreamableHTTPServer(NewServer(cached, cacheAddr, nil), mcpserver.WithEndpointPath("/mcp"))` mounted at `/mcp` on a dedicated `http.ServeMux`. When `token != ""`, a middleware requires `Authorization: Bearer <token>` compared via `subtle.ConstantTimeCompare` and otherwise returns `401 Unauthorized` with `WWW-Authenticate: Bearer`.
+  - Internal helper `newStreamableHTTP(cached bool, cacheAddr string, token string) (http.Handler, *mcpserver.StreamableHTTPServer)` creates `mcpSrv := NewServer(cached, cacheAddr, nil)` and `streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)` (omitting the no-op `WithEndpointPath` option) and mounts `streamSrv` at `/mcp` on a dedicated `http.ServeMux`. `mcp-go`'s default loopback DNS-rebinding check remains enabled.
+  - When `token != ""`, a middleware checks `Authorization` using `strings.Fields` and case-insensitive `strings.EqualFold(parts[0], "bearer")` (matching `internal/api/server.go`) plus `subtle.ConstantTimeCompare` against `token`; missing or wrong credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`.
+  - Exported `NewStreamableHTTPHandler(cached bool, cacheAddr string, token string) http.Handler` returns the handler for testing and composition.
   - `ServeStreamableHTTP(ctx context.Context, addr string, cached bool, cacheAddr string, tokenEnv string) error`:
     - Validates `addr` with `net.SplitHostPort`.
     - When `tokenEnv != ""`, resolves the bearer token via `secrets.Resolve(tokenEnv, "")` and fails closed if unset or empty.
     - Refuses to bind a non-loopback host (`host` not `"localhost"` and not a loopback IP) unless `token != ""` (fail closed against accidental unauthenticated LAN/wildcard exposure).
-    - Runs `http.Server` (`ReadHeaderTimeout: 10 * time.Second`) and shuts down cleanly when `ctx` is canceled.
+    - Runs `http.Server` (`ReadHeaderTimeout: 10 * time.Second`) on a `net.Listen("tcp", addr)` listener. When `ctx` is canceled, runs a bounded 5-second drain calling `streamSrv.CloseSessions(drainCtx)` to release active SSE `GET /mcp` streams alongside `srv.Shutdown(drainCtx)`, falling back to `srv.Close()` if shutdown still blocks.
 - In `cmd/axis/mcp.go`:
   - Add `--addr` (default `"127.0.0.1:42426"`) and `--token-env` (default `""`) to `axis mcp serve`.
   - Update `--transport` to accept `"stdio"` (default) and `"http"`; reject any other value with `unsupported transport %q: supported transports are stdio, http`.
+  - For `--transport http`, wrap `cmd.Context()` with `signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)` before calling `serveMCPHTTP`, matching `cmd/axis/serve.go`.
   - Add `var serveMCPHTTP = axismcp.ServeStreamableHTTP` test seam matching `serveMCPStdio`.
-- Update `AGENTS.md` CLI table row for `axis mcp serve` to note stdio or Streamable HTTP (preserving the exact 29-command / 21-tool doc-fact counts).
+- Update `AGENTS.md` CLI table row for `axis mcp serve` (preserving the exact 30-command / 21-tool doc-fact counts) and `docs/current-state.md` row for `axis mcp serve` to document both `stdio` and Streamable HTTP transports.
 
 ### 4. Tests
 
@@ -102,11 +105,11 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - Self-signed `httptest.NewTLSServer` fails without pin, succeeds with matching `tls_cert_fingerprint` (including colon-separated / `sha256:` formats), and fails with wrong pin.
   - Rejects `tls_cert_fingerprint` on `http://` URL.
   - Preserves cross-origin and scheme-downgrade redirect blocking when TLS pin is active.
-  - `ResolveHeaders`: expands `${VAR}` without mutating `cfg.Headers`; fails closed on unset/blank `${VAR}` and malformed `${...}`; resolves `bearer_token_env` and `bearer_token_file` via `secrets.Resolve`; rejects conflicting `Authorization` header; end-to-end `connectHTTP` over pinned TLS + `bearer_token_env` against an in-process `NewStreamableHTTPHandler` MCP server!
+  - `ResolveHeaders`: expands `${VAR}` in a single pass without mutating `cfg.Headers`, trims whitespace, succeeds when the env var's value itself contains literal `${`, fails closed on unset/blank `${VAR}` and malformed `${...}`; resolves `bearer_token_env` and `bearer_token_file` via `secrets.Resolve`; rejects conflicting `Authorization` header; end-to-end `connectHTTP` over pinned TLS + `bearer_token_env` against an in-process `NewStreamableHTTPHandler` MCP server.
 - `internal/mcp/http_test.go`:
   - Streamable HTTP `/mcp` initialize + `tools/list` (verifying 21 tools) over `httptest.NewServer(NewStreamableHTTPHandler(...))`.
-  - Bearer auth middleware: rejects missing/wrong token with 401 and accepts matching token.
-  - `ServeStreamableHTTP`: refuses non-loopback `--addr` without `--token-env`; fails closed when `--token-env` is unset; binds loopback `127.0.0.1:0` and shuts down cleanly on context cancel.
+  - Bearer auth middleware: rejects missing/wrong token with 401 and accepts matching token (including case-insensitive `bearer` scheme).
+  - `ServeStreamableHTTP`: refuses non-loopback `--addr` without `--token-env`; fails closed when `--token-env` is unset; binds loopback `127.0.0.1:0` and shuts down cleanly on context cancel even while a client holds an active `GET /mcp` SSE stream open.
 - `cmd/axis/command_surface_test.go`:
   - Update unsupported-transport test (`--transport sse`) and add tests verifying `axis mcp serve --transport http --addr ... --token-env ...` invokes `serveMCPHTTP`.
 - `internal/agent/mcp_approval_test.go`:
@@ -128,4 +131,4 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
 
 ## Review
 
-(Pending fresh-context spec review before implementation.)
+(Spec review record added in next commit referencing the fix SHA.)
