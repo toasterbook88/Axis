@@ -268,15 +268,8 @@ func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, raw
 		return fmt.Errorf("tool call failed: %w", result.Err)
 	}
 
-	for _, content := range result.Result.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			fmt.Fprintln(out, tc.Text)
-		} else if ic, ok := content.(mcp.ImageContent); ok {
-			fmt.Fprintf(out, "[image: %s %d bytes]\n", ic.MIMEType, len(ic.Data))
-		} else {
-			b, _ := json.MarshalIndent(content, "", "  ")
-			fmt.Fprintln(out, string(b))
-		}
+	for _, part := range mcpclient.ContentParts(result.Result) {
+		fmt.Fprintln(out, part)
 	}
 	return nil
 }
@@ -302,15 +295,8 @@ func runMCPClientCall(ctx context.Context, out io.Writer, serverName, toolName, 
 		return fmt.Errorf("tool call failed: %w", result.Err)
 	}
 
-	for _, content := range result.Result.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			fmt.Fprintln(out, tc.Text)
-		} else if ic, ok := content.(mcp.ImageContent); ok {
-			fmt.Fprintf(out, "[image: %s %d bytes]\n", ic.MIMEType, len(ic.Data))
-		} else {
-			b, _ := json.MarshalIndent(content, "", "  ")
-			fmt.Fprintln(out, string(b))
-		}
+	for _, part := range mcpclient.ContentParts(result.Result) {
+		fmt.Fprintln(out, part)
 	}
 	return nil
 }
