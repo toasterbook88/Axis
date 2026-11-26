@@ -31,6 +31,7 @@ func mcpServeCmd() *cobra.Command {
 	var transport string
 	var addr string
 	var tokenEnv string
+	var allowInsecureHTTP bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -42,7 +43,7 @@ func mcpServeCmd() *cobra.Command {
 			case "http":
 				ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 				defer stop()
-				return serveMCPHTTP(ctx, addr, cached, cacheAddr, tokenEnv)
+				return serveMCPHTTP(ctx, addr, cached, cacheAddr, tokenEnv, allowInsecureHTTP)
 			default:
 				return fmt.Errorf("unsupported transport %q: supported transports are stdio, http", transport)
 			}
@@ -53,6 +54,7 @@ func mcpServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.Flags().StringVar(&transport, "transport", "stdio", "MCP transport: stdio or http")
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:42426", "Listen address for Streamable HTTP transport (/mcp)")
-	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "Environment variable holding a Bearer token for Streamable HTTP transport (required for non-loopback --addr)")
+	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "Environment variable holding a Bearer token for Streamable HTTP transport (required)")
+	cmd.Flags().BoolVar(&allowInsecureHTTP, "allow-insecure-http", false, "Allow a non-loopback Streamable HTTP listener without TLS. The bearer token is sent in cleartext")
 	return cmd
 }

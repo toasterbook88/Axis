@@ -1,13 +1,17 @@
 package axismcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,30 +146,46 @@ func TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS(t *testing.T) {
 }
 
 func TestServeStreamableHTTPGuards(t *testing.T) {
-	// Non-loopback without token is refused.
-	for _, addr := range []string{"0.0.0.0:42426", ":42426", "192.0.2.10:42426"} {
-		err := ServeStreamableHTTP(context.Background(), addr, false, "", "")
-		if err == nil || !strings.Contains(err.Error(), "non-loopback") {
-			t.Fatalf("ServeStreamableHTTP(%q) = %v, want non-loopback refusal", addr, err)
+	// HTTP without a token is refused, including loopback and non-loopback.
+	for _, addr := range []string{"127.0.0.1:42426", "0.0.0.0:42426", ":42426", "192.0.2.10:42426"} {
+		err := ServeStreamableHTTP(context.Background(), addr, false, "", "", false)
+		if err == nil || !strings.Contains(err.Error(), "unauthenticated") {
+			t.Fatalf("ServeStreamableHTTP(%q) = %v, want unauthenticated refusal", addr, err)
 		}
 	}
 
+	// A token is not enough for a non-loopback cleartext bind.
+	t.Setenv("TEST_SERVE_MCP_HTTP_TOKEN", "loopback-secret")
+	err := ServeStreamableHTTP(context.Background(), "192.0.2.10:42426", false, "", "TEST_SERVE_MCP_HTTP_TOKEN", false)
+	if err == nil || !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("ServeStreamableHTTP non-loopback with token = %v, want cleartext refusal", err)
+	}
+
 	// Unset --token-env fails closed even on loopback.
-	err := ServeStreamableHTTP(context.Background(), "127.0.0.1:0", false, "", "UNSET_AXIS_MCP_HTTP_TOKEN_12345")
+	err = ServeStreamableHTTP(context.Background(), "127.0.0.1:0", false, "", "UNSET_AXIS_MCP_HTTP_TOKEN_12345", false)
 	if err == nil || !strings.Contains(err.Error(), "resolve bearer token") {
 		t.Fatalf("ServeStreamableHTTP unset token env = %v, want resolve error", err)
 	}
 
 	// Whitespace-only --token-env fails closed instead of serving unauthenticated.
-	err = ServeStreamableHTTP(context.Background(), "127.0.0.1:0", false, "", "   ")
+	err = ServeStreamableHTTP(context.Background(), "127.0.0.1:0", false, "", "   ", false)
 	if err == nil || !strings.Contains(err.Error(), "whitespace-only") {
 		t.Fatalf("ServeStreamableHTTP whitespace token env = %v, want whitespace-only error", err)
 	}
 
 	// Invalid listen address fails.
-	err = ServeStreamableHTTP(context.Background(), "not-host-port", false, "", "")
+	err = ServeStreamableHTTP(context.Background(), "not-host-port", false, "", "", false)
 	if err == nil || !strings.Contains(err.Error(), "invalid listen address") {
 		t.Fatalf("ServeStreamableHTTP invalid addr = %v, want invalid listen address", err)
+	}
+
+	// The opt-in flag passes the cleartext guard. 192.0.2.10 is documentation
+	// space and is not assigned here, so the call fails at listen.
+	allowCtx, allowCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer allowCancel()
+	err = ServeStreamableHTTP(allowCtx, "192.0.2.10:42426", false, "", "TEST_SERVE_MCP_HTTP_TOKEN", true)
+	if err != nil && (strings.Contains(err.Error(), "cleartext") || strings.Contains(err.Error(), "unauthenticated")) {
+		t.Fatalf("ServeStreamableHTTP allow-insecure = %v, want the cleartext guard passed", err)
 	}
 }
 
@@ -174,8 +194,74 @@ func TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	if err := ServeStreamableHTTP(ctx, "127.0.0.1:0", false, "", "TEST_SERVE_MCP_HTTP_TOKEN"); err != nil {
+	if err := ServeStreamableHTTP(ctx, "127.0.0.1:0", false, "", "TEST_SERVE_MCP_HTTP_TOKEN", false); err != nil {
 		t.Fatalf("ServeStreamableHTTP loopback with tokenEnv: %v", err)
+	}
+}
+
+// lockedLog is the slog sink for the idle-sweeper test. The sweeper writes
+// from its own goroutine while the test reads, so a plain bytes.Buffer races.
+type lockedLog struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestStreamableHTTPSessionIdleTTLSweepsAbandonedSession(t *testing.T) {
+	var logs lockedLog
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	handler, stream := newStreamableHTTPWithTTL(false, "", "", 50*time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = stream.Shutdown(ctx)
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"idle-test","version":"0.1.0"}}}`
+	initReq, err := http.NewRequest(http.MethodPost, srv.URL+"/mcp", strings.NewReader(initBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	initReq.Header.Set("Content-Type", "application/json")
+	initReq.Header.Set("Accept", "application/json, text/event-stream")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		t.Fatalf("POST initialize: %v", err)
+	}
+	sessionID := initResp.Header.Get("Mcp-Session-Id")
+	body, _ := io.ReadAll(initResp.Body)
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK || sessionID == "" {
+		t.Fatalf("initialize status=%d session=%q body=%s", initResp.StatusCode, sessionID, body)
+	}
+
+	// The sweeper interval is at least one second. Two ticks is enough for a
+	// 50ms TTL to expire without racing the first tick.
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for {
+		if strings.Contains(logs.String(), "Sweeping expired session") && strings.Contains(logs.String(), sessionID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s was not swept; log=%s", sessionID, logs.String())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -185,6 +271,11 @@ func TestServeStreamableHTTPGracefulShutdownWithActiveSSEStream(t *testing.T) {
 		t.Fatalf("net.Listen: %v", err)
 	}
 	baseURL := "http://" + ln.Addr().String() + "/mcp"
+
+	// One connection at a time. The default client can dial a spare connection
+	// while the previous request returns to the pool, and net/http Shutdown
+	// will not close a StateNew connection for 5s. That exceeds this test.
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true, MaxIdleConns: 0}}
 
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -200,11 +291,12 @@ func TestServeStreamableHTTPGracefulShutdownWithActiveSSEStream(t *testing.T) {
 	}
 	initReq.Header.Set("Content-Type", "application/json")
 	initReq.Header.Set("Accept", "application/json, text/event-stream")
-	initResp, err := http.DefaultClient.Do(initReq)
+	initResp, err := client.Do(initReq)
 	if err != nil {
 		t.Fatalf("POST initialize: %v", err)
 	}
 	sessionID := initResp.Header.Get("Mcp-Session-Id")
+	_, _ = io.Copy(io.Discard, initResp.Body)
 	initResp.Body.Close()
 	if initResp.StatusCode != http.StatusOK || sessionID == "" {
 		t.Fatalf("initialize status=%d sessionID=%q, want 200 with Mcp-Session-Id", initResp.StatusCode, sessionID)
@@ -217,7 +309,7 @@ func TestServeStreamableHTTPGracefulShutdownWithActiveSSEStream(t *testing.T) {
 	}
 	sseReq.Header.Set("Accept", "text/event-stream")
 	sseReq.Header.Set("Mcp-Session-Id", sessionID)
-	sseResp, err := http.DefaultClient.Do(sseReq)
+	sseResp, err := client.Do(sseReq)
 	if err != nil {
 		t.Fatalf("GET /mcp SSE: %v", err)
 	}
@@ -226,7 +318,7 @@ func TestServeStreamableHTTPGracefulShutdownWithActiveSSEStream(t *testing.T) {
 		t.Fatalf("GET /mcp status = %d, want 200", sseResp.StatusCode)
 	}
 
-	// Cancel server context: CloseSessions + Shutdown must exit promptly without hanging.
+	// Cancel server context: session shutdown plus HTTP shutdown must exit promptly.
 	srvCancel()
 	select {
 	case err := <-done:

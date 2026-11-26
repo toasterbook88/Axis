@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -199,6 +198,13 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
 
+	if len(headers) > 0 {
+		base := httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		httpClient.Transport = headerRoundTripper{base: base, headers: headers}
+	}
 	opts := []transport.StreamableHTTPCOption{
 		transport.WithHTTPBasicClient(httpClient),
 	}
@@ -242,20 +248,29 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
 		tr = defaults.Clone()
 	}
+	targetHost := parsed.Hostname()
 	tr.TLSClientConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		// InsecureSkipVerify bypasses system CA chain validation for self-signed
 		// local certificates; authenticity is enforced strictly by
-		// VerifyPeerCertificate pinning the leaf DER SHA-256 digest below.
+		// VerifyConnection pinning the origin leaf DER SHA-256 digest below.
+		// An HTTPS proxy handshake carries the proxy's ServerName. Skip the
+		// pin only for a non-empty name that is not the origin. An empty
+		// name is pinned: an IP origin often omits ServerName, and skipping
+		// it would accept any certificate.
 		InsecureSkipVerify: true, //nolint:gosec
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if cs.ServerName != "" && !strings.EqualFold(cs.ServerName, targetHost) {
+				return nil
+			}
+			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
 			}
-			if _, err := x509.ParseCertificate(rawCerts[0]); err != nil {
-				return fmt.Errorf("tls pin verification failed: invalid leaf certificate: %w", err)
+			leaf := cs.PeerCertificates[0]
+			if leaf == nil {
+				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
 			}
-			sum := sha256.Sum256(rawCerts[0])
+			sum := sha256.Sum256(leaf.Raw)
 			if subtle.ConstantTimeCompare(sum[:], expected[:]) != 1 {
 				return fmt.Errorf("tls certificate fingerprint mismatch")
 			}
@@ -335,6 +350,28 @@ func expandHeaderEnv(raw string) (string, error) {
 		i = start + endRel + 1
 	}
 	return b.String(), nil
+}
+
+// headerRoundTripper attaches headers that mcp-go omits on the legacy session
+// DELETE issued by StreamableHTTP.Close. Normal requests already carry the
+// same headers, so an existing value is left unchanged.
+type headerRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for k, v := range h.headers {
+		if clone.Header.Get(k) == "" {
+			clone.Header.Set(k, v)
+		}
+	}
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
 }
 
 // newMCPHTTPClient is the HTTP client for streamable MCP connections. It

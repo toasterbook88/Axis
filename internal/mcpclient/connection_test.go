@@ -1,17 +1,26 @@
 package mcpclient
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -385,4 +394,208 @@ func TestConnectHTTPWithPinnedTLSAndBearerTokenEnv(t *testing.T) {
 	if sc.ToolCount() != 1 || sc.Tools[0].Name != "query_device_info" {
 		t.Fatalf("tools = %+v, want [query_device_info]", sc.Tools)
 	}
+}
+
+// TestConnectHTTPCloseDeleteCarriesAuthorization forces the legacy session
+// handshake. mcp-go omits configured headers on the session DELETE that
+// Close sends; the client's transport has to attach them.
+func TestConnectHTTPCloseDeleteCarriesAuthorization(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	netutil.AllowInternalHost("127.0.0.1")
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	const wantToken = "delete-bearer-token"
+	t.Setenv("TEST_DELETE_MCP_TOKEN", wantToken)
+
+	mcpSrv := mcpserver.NewMCPServer("test-delete", "0.1.0", mcpserver.WithToolCapabilities(false))
+	streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)
+
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal(body, &msg) == nil && msg.Method == "server/discover" {
+			w.Header().Set("Content-Type", "application/json")
+			id := msg.ID
+			if len(id) == 0 {
+				id = json.RawMessage("null")
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}`, id)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		streamSrv.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	sc, err := connectHTTP(context.Background(), "legacy_app", config.MCPServerConfig{
+		Transport:      "http",
+		URL:            srv.URL + "/mcp",
+		BearerTokenEnv: "TEST_DELETE_MCP_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("connectHTTP: %v", err)
+	}
+	if sc == nil || !sc.Connected() {
+		var connectErr error
+		if sc != nil {
+			connectErr = sc.Err
+		}
+		t.Fatalf("expected legacy session connected, err=%v", connectErr)
+	}
+	if err := sc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var deleteAuth string
+	sawDelete := false
+	for _, line := range seen {
+		if strings.HasPrefix(line, http.MethodDelete+" ") {
+			sawDelete = true
+			deleteAuth = strings.TrimPrefix(line, http.MethodDelete+" ")
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("Close sent no DELETE; requests=%v", seen)
+	}
+	if deleteAuth != "Bearer "+wantToken {
+		t.Fatalf("DELETE Authorization = %q, want Bearer token", deleteAuth)
+	}
+}
+
+func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	proxyURL := startHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	originURL := "https://origin.test/hello"
+	originPin := "sha256:" + certFingerprintHex(t, origin)
+
+	okClient, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: originPin,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient: %v", err)
+	}
+	setTestProxy(t, okClient, proxyURL)
+	okClient.Timeout = 5 * time.Second
+
+	resp, err := okClient.Get(originURL)
+	if err != nil {
+		t.Fatalf("pinned origin through HTTPS proxy: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "origin-ok" {
+		t.Fatalf("status=%d body=%q, want 200 origin-ok", resp.StatusCode, body)
+	}
+
+	wrong := originPin
+	if wrong[len("sha256:")] == '0' {
+		wrong = "sha256:1" + wrong[len("sha256:")+1:]
+	} else {
+		wrong = "sha256:0" + wrong[len("sha256:"):][1:]
+	}
+	badClient, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: wrong,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient wrong pin: %v", err)
+	}
+	setTestProxy(t, badClient, proxyURL)
+	badClient.Timeout = 5 * time.Second
+	if resp, err := badClient.Get(originURL); err == nil {
+		resp.Body.Close()
+		t.Fatal("wrong origin pin succeeded through the HTTPS proxy")
+	}
+}
+
+func setTestProxy(t *testing.T, client *http.Client, proxyRaw string) {
+	t.Helper()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", client.Transport)
+	}
+	parsed, err := url.Parse(proxyRaw)
+	if err != nil {
+		t.Fatalf("proxy URL: %v", err)
+	}
+	tr.Proxy = func(*http.Request) (*url.URL, error) { return parsed, nil }
+}
+
+func startHTTPSConnectProxy(t *testing.T, originAddr string) string {
+	t.Helper()
+	mint := httptest.NewTLSServer(http.NewServeMux())
+	certs := mint.TLS.Certificates
+	mint.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: certs})
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go handleConnectProxy(conn, originAddr)
+		}
+	}()
+	return "https://" + ln.Addr().String()
+}
+
+func handleConnectProxy(conn net.Conn, originAddr string) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	if req.Method != http.MethodConnect {
+		_, _ = io.WriteString(conn, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	dest, err := net.DialTimeout("tcp", originAddr, 2*time.Second)
+	if err != nil {
+		_, _ = io.WriteString(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
+	_ = dest.SetDeadline(time.Time{})
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(dest, br)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(conn, dest)
+		done <- struct{}{}
+	}()
+	<-done
 }
