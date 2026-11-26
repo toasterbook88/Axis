@@ -51,3 +51,32 @@ func TestMCPServeCacheAddrOverride(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPServeCmdHandsDefaultAddrToServeStdio proves the default reaches the
+// startup call, not just the flag's DefValue: it stubs the package-level
+// serveMCPStdio hook, executes `mcp serve --cached` with no --cache-addr, and
+// asserts api.DefaultAddr() is what the server is actually handed.
+func TestMCPServeCmdHandsDefaultAddrToServeStdio(t *testing.T) {
+	var gotAddr string
+	var gotCached bool
+	restore := stubServeMCPStdio(t, func(cached bool, addr string) error {
+		gotCached, gotAddr = cached, addr
+		return nil
+	})
+	t.Cleanup(restore)
+
+	cmd := mcpServeCmd()
+	cmd.SetArgs([]string{"--cached"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mcp serve --cached: %v", err)
+	}
+	if !gotCached {
+		t.Fatal("serveMCPStdio received cached=false, want true")
+	}
+	if want := api.DefaultAddr(); gotAddr != want {
+		t.Fatalf("serveMCPStdio addr = %q, want %q (api.DefaultAddr)", gotAddr, want)
+	}
+	if gotAddr == "127.0.0.1:42425" {
+		t.Fatal("serveMCPStdio still received the legacy TCP address")
+	}
+}
