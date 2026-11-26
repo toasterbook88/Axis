@@ -53,6 +53,24 @@ func TestContentPartsStructuredOnly(t *testing.T) {
 	}
 }
 
+// TestParseStructuredOnlyToolResult proves the wire parser accepts a result
+// that has structuredContent and no content array, then ContentParts renders it.
+// mcp-go 1.5.0 rejected that payload with "content is missing".
+func TestParseStructuredOnlyToolResult(t *testing.T) {
+	raw := json.RawMessage(`{"structuredContent":{"nodes":2,"status":"healthy"}}`)
+	res, err := mcp.ParseCallToolResult(&raw)
+	if err != nil {
+		t.Fatalf("ParseCallToolResult: %v", err)
+	}
+	got := ContentParts(res)
+	if len(got) != 1 {
+		t.Fatalf("parsed structured-only result rendered %d parts, want 1: %#v", len(got), got)
+	}
+	if !strings.Contains(got[0], `"nodes"`) || !strings.Contains(got[0], `"healthy"`) {
+		t.Fatalf("parsed structured payload not preserved: %q", got[0])
+	}
+}
+
 // TestContentPartsStructuredWithoutRaw covers the decoded-only shape, where the
 // client never retained the original bytes.
 func TestContentPartsStructuredWithoutRaw(t *testing.T) {
