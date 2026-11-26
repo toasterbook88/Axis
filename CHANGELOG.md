@@ -1,3 +1,43 @@
+## v0.29.0 (2026-11-26)
+
+`axis mcp serve` can serve Streamable HTTP with mandatory bearer auth, and its stdio cache now dials
+the daemon socket instead of a port nothing listens on.
+
+### Breaking
+
+* `axis mcp serve --transport http` requires `--token-env`. The bearer token is read from that
+  environment variable, and an empty or whitespace-only name is refused before the listener binds —
+  on loopback too, because the daemon's unix socket is mode `0600`, so a loopback TCP listener without
+  a token would hand the tools to every local account (#678).
+* A non-loopback `--addr` additionally requires `--allow-insecure-http`. The listener is plain HTTP, so
+  the token travels in cleartext; front it with a TLS proxy or keep the loopback default (#678).
+
+### Features
+
+* `axis mcp serve --transport http` serves MCP over Streamable HTTP at `/mcp`, bound to
+  `127.0.0.1:42426` by default. Idle sessions are reaped after 15 minutes and shutdown stops the
+  sweeper, so an abandoned session no longer accumulates (#678).
+* MCP client connections accept `tls_cert_fingerprint` (sha256 of the origin leaf DER, pinned with a
+  constant-time compare), `bearer_token_env` and `bearer_token_file` for secret headers, and hold
+  redirects to the origin's scheme and host — the mitigation named by GO-2026-6911 (#678).
+* An HTTPS proxy whose certificate is not the origin's is verified with `x509.Verify` against the
+  system roots, with the host compared in canonical form, instead of being trusted or rejected
+  outright (#678).
+
+### Fixes
+
+* `axis mcp serve --cached` defaults `--cache-addr` to `api.DefaultAddr()`, the local daemon's unix
+  socket, instead of the hardcoded `127.0.0.1:42425` that no daemon listens on — so the cache works
+  again on a healthy daemon (#681).
+* MCP tool results that carry only `structuredContent` are rendered instead of printing nothing:
+  mcp-go 1.6 accepts that shape, and both the CLI and the agent bridge walked only content blocks
+  (#682).
+
+### Documentation
+
+* `docs/current-state.md` records the `axis mcp serve` transports, the cache-address default, and the
+  HTTP auth requirements; the TLS-pinning / Streamable-HTTP design note is updated to match (#678).
+
 ## v0.28.0 (2026-11-20)
 
 `axis doctor` warns when a node's root volume is nearly full.
