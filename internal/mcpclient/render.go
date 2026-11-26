@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -50,11 +51,11 @@ func ContentParts(res *mcp.CallToolResult) []string {
 // bytes; StructuredContent is the decoded form and is used as a fallback.
 func structuredParts(res *mcp.CallToolResult) []string {
 	if len(res.RawStructuredContent) > 0 {
-		var indented any
-		if err := json.Unmarshal(res.RawStructuredContent, &indented); err == nil {
-			if b, err := json.MarshalIndent(indented, "", "  "); err == nil {
-				return []string{string(b)}
-			}
+		// Indent the original bytes. Decoding into any would turn every
+		// JSON number into float64 and round integers above 2^53.
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, res.RawStructuredContent, "", "  "); err == nil {
+			return []string{buf.String()}
 		}
 		return []string{string(res.RawStructuredContent)}
 	}

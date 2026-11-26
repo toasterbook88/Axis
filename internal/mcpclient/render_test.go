@@ -71,6 +71,27 @@ func TestParseStructuredOnlyToolResult(t *testing.T) {
 	}
 }
 
+// TestContentPartsPreservesLargeStructuredInteger keeps an integer above 2^53
+// exact. Decoding the raw JSON into any would round it through float64.
+func TestContentPartsPreservesLargeStructuredInteger(t *testing.T) {
+	const exact = "9007199254740993"
+	raw := json.RawMessage(`{"structuredContent":{"record_id":` + exact + `}}`)
+	res, err := mcp.ParseCallToolResult(&raw)
+	if err != nil {
+		t.Fatalf("ParseCallToolResult: %v", err)
+	}
+	got := ContentParts(res)
+	if len(got) != 1 {
+		t.Fatalf("rendered %d parts, want 1: %#v", len(got), got)
+	}
+	if !strings.Contains(got[0], exact) {
+		t.Fatalf("large integer not preserved: %q", got[0])
+	}
+	if strings.Contains(got[0], "9007199254740992") {
+		t.Fatalf("large integer was rounded: %q", got[0])
+	}
+}
+
 // TestContentPartsStructuredWithoutRaw covers the decoded-only shape, where the
 // client never retained the original bytes.
 func TestContentPartsStructuredWithoutRaw(t *testing.T) {
