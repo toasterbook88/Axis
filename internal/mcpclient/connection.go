@@ -3,9 +3,18 @@ package mcpclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +23,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/netutil"
+	"github.com/toasterbook88/axis/internal/secrets"
 )
 
 // ServerConnection holds the state of a single MCP server connection.
@@ -181,11 +191,27 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
 
-	opts := []transport.StreamableHTTPCOption{
-		transport.WithHTTPBasicClient(newMCPHTTPClient()),
+	httpClient, err := NewHTTPClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
-	if len(cfg.Headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+	headers, err := ResolveHeaders(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
+	}
+
+	if len(headers) > 0 {
+		base := httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		httpClient.Transport = headerRoundTripper{base: base, headers: headers}
+	}
+	opts := []transport.StreamableHTTPCOption{
+		transport.WithHTTPBasicClient(httpClient),
+	}
+	if len(headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(headers))
 	}
 
 	client, err := mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
@@ -198,6 +224,226 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 
 // maxMCPRedirects is Go's default redirect limit, kept by newMCPHTTPClient.
 const maxMCPRedirects = 10
+
+var headerEnvVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// NewHTTPClient constructs the HTTP client for streamable MCP connections.
+// It enforces the same-origin redirect policy and, when cfg.TLSCertFingerprint
+// is set, configures TLS leaf certificate SHA-256 pinning for https endpoints.
+// The trust pool for a non-origin TLS handshake (an HTTPS proxy) is the system
+// roots; newHTTPClientWithProxyRoots lets a caller inject one.
+func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
+	return newHTTPClientWithProxyRoots(cfg, nil)
+}
+
+// newHTTPClientWithProxyRoots is NewHTTPClient with an injectable trust pool
+// for a TLS handshake whose ServerName is not the origin — that is, an HTTPS
+// proxy. Nil selects the system roots inside x509.Verify. Production passes nil;
+// tests pass a local pool, so no package-level state is mutated and parallel
+// tests cannot race.
+func newHTTPClientWithProxyRoots(cfg config.MCPServerConfig, proxyRoots *x509.CertPool) (*http.Client, error) {
+	client := newMCPHTTPClient()
+
+	if cfg.TLSCertFingerprint == "" {
+		return client, nil
+	}
+
+	parsed, err := url.Parse(cfg.URL)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, fmt.Errorf("tls_cert_fingerprint requires an https URL")
+	}
+	expected, err := config.ParseTLSCertFingerprint(cfg.TLSCertFingerprint)
+	if err != nil {
+		return nil, err
+	}
+
+	tr := &http.Transport{}
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = defaults.Clone()
+	}
+	targetHost := parsed.Hostname()
+	tr.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		// InsecureSkipVerify bypasses system CA chain validation for self-signed
+		// local certificates; authenticity is enforced strictly by
+		// VerifyConnection pinning the origin leaf DER SHA-256 digest below.
+		// An HTTPS proxy handshake carries the proxy's ServerName. That
+		// handshake is checked with x509.Verify instead of the origin pin.
+		// An empty name is pinned: an IP origin often omits ServerName, and
+		// skipping it would accept any certificate.
+		InsecureSkipVerify: true, //nolint:gosec
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			// Compare canonical forms: a config host written with a trailing dot,
+			// in mixed case, or as an expanded IPv6 literal names the same origin
+			// as the SNI the handshake carries. Comparing raw strings sent such a
+			// spelling down the non-origin branch, where a leaf pin is replaced by
+			// CA trust — fail-open for an origin with a public certificate.
+			serverName := canonicalizeHost(cs.ServerName)
+			if serverName != "" && serverName != canonicalizeHost(targetHost) {
+				return verifyNonOriginCertificate(cs, proxyRoots)
+			}
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
+			}
+			leaf := cs.PeerCertificates[0]
+			if leaf == nil {
+				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
+			}
+			sum := sha256.Sum256(leaf.Raw)
+			if subtle.ConstantTimeCompare(sum[:], expected[:]) != 1 {
+				return fmt.Errorf("tls certificate fingerprint mismatch")
+			}
+			return nil
+		},
+	}
+	client.Transport = tr
+	return client, nil
+}
+
+// verifyNonOriginCertificate checks an HTTPS proxy handshake. The origin pin
+// does not apply here. A nil root pool makes x509.Verify use the system roots.
+func verifyNonOriginCertificate(cs tls.ConnectionState, rootCAs *x509.CertPool) error {
+	if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0] == nil {
+		return fmt.Errorf("tls proxy certificate verification failed: peer presented no certificate")
+	}
+	leaf := cs.PeerCertificates[0]
+	intermediates := x509.NewCertPool()
+	for _, cert := range cs.PeerCertificates[1:] {
+		if cert != nil {
+			intermediates.AddCert(cert)
+		}
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       cs.ServerName,
+		Intermediates: intermediates,
+		Roots:         rootCAs,
+	}
+	if _, err := leaf.Verify(opts); err != nil {
+		return fmt.Errorf("tls proxy certificate verification failed: %w", err)
+	}
+	return nil
+}
+
+// canonicalizeHost normalises a TLS server name or URL host so two spellings of
+// the same host compare equal: surrounding space, trailing dot(s), letter case,
+// and IPv6 textual form (including IPv4-mapped addresses).
+//
+// IDNA is deliberately not handled. golang.org/x/net is not a direct dependency
+// of this module, and adding one for a comparison would widen the dependency
+// surface of the client library. A config host written in Unicode therefore does
+// not match its punycode SNI and is treated as a non-origin handshake, which
+// fails closed for a pinned origin.
+func canonicalizeHost(host string) string {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return ""
+	}
+	// A URL host may carry brackets around an IPv6 literal; SNI never does.
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		h = h[1 : len(h)-1]
+	}
+	h = strings.TrimRight(h, ".")
+	h = strings.ToLower(h)
+	if addr, err := netip.ParseAddr(h); err == nil {
+		// Unmap folds ::ffff:127.0.0.1 onto 127.0.0.1 so both spellings compare
+		// equal; String() emits the canonical compressed form for IPv6.
+		return addr.Unmap().String()
+	}
+	return h
+}
+
+// ResolveHeaders returns a fresh HTTP header map for cfg without mutating
+// cfg.Headers. It performs single-pass ${VAR} expansion on raw header templates
+// and resolves BearerTokenEnv / BearerTokenFile via internal/secrets.
+func ResolveHeaders(cfg config.MCPServerConfig) (map[string]string, error) {
+	hasBearer := cfg.BearerTokenEnv != "" || cfg.BearerTokenFile != ""
+	if len(cfg.Headers) == 0 && !hasBearer {
+		return nil, nil
+	}
+	if cfg.BearerTokenFile != "" && strings.TrimSpace(cfg.BearerTokenFile) == "" {
+		return nil, fmt.Errorf("bearer_token_file cannot be whitespace-only")
+	}
+
+	resolved := make(map[string]string, len(cfg.Headers)+1)
+	for k, v := range cfg.Headers {
+		if hasBearer && strings.EqualFold(strings.TrimSpace(k), "authorization") {
+			return nil, fmt.Errorf("cannot set both bearer_token_env/bearer_token_file and Authorization header")
+		}
+		expanded, err := expandHeaderEnv(v)
+		if err != nil {
+			return nil, fmt.Errorf("header %q: %w", k, err)
+		}
+		resolved[k] = expanded
+	}
+
+	if hasBearer {
+		token, err := secrets.Resolve(cfg.BearerTokenEnv, cfg.BearerTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve bearer token: %w", err)
+		}
+		resolved["Authorization"] = "Bearer " + token
+	}
+
+	return resolved, nil
+}
+
+// expandHeaderEnv expands ${VAR} placeholders in a single pass over raw without
+// re-scanning substituted values.
+func expandHeaderEnv(raw string) (string, error) {
+	if !strings.Contains(raw, "${") {
+		return raw, nil
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	i := 0
+	for i < len(raw) {
+		idx := strings.Index(raw[i:], "${")
+		if idx < 0 {
+			b.WriteString(raw[i:])
+			break
+		}
+		b.WriteString(raw[i : i+idx])
+		start := i + idx + 2
+		endRel := strings.IndexByte(raw[start:], '}')
+		if endRel < 0 {
+			return "", fmt.Errorf("unclosed env placeholder in header value")
+		}
+		name := raw[start : start+endRel]
+		if !headerEnvVarNameRe.MatchString(name) {
+			return "", fmt.Errorf("invalid env placeholder %q in header value", name)
+		}
+		val, ok := os.LookupEnv(name)
+		trimmed := strings.TrimSpace(val)
+		if !ok || trimmed == "" {
+			return "", fmt.Errorf("environment variable %q is unset or empty", name)
+		}
+		b.WriteString(trimmed)
+		i = start + endRel + 1
+	}
+	return b.String(), nil
+}
+
+// headerRoundTripper attaches headers that mcp-go omits on the legacy session
+// DELETE issued by StreamableHTTP.Close. Normal requests already carry the
+// same headers, so an existing value is left unchanged.
+type headerRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for k, v := range h.headers {
+		if clone.Header.Get(k) == "" {
+			clone.Header.Set(k, v)
+		}
+	}
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
 
 // newMCPHTTPClient is the HTTP client for streamable MCP connections. It
 // follows a redirect only to the origin (scheme and host) of the first

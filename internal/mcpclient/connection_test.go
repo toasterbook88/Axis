@@ -1,11 +1,38 @@
 package mcpclient
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 func TestMCPHTTPClientRejectsCrossOriginRedirects(t *testing.T) {
@@ -96,5 +123,747 @@ func TestMCPHTTPClientAllowsSameOriginRedirects(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func certFingerprintHex(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	if srv.TLS == nil || len(srv.TLS.Certificates) == 0 || len(srv.TLS.Certificates[0].Certificate) == 0 {
+		t.Fatal("test TLS server has no certificate")
+	}
+	sum := sha256.Sum256(srv.TLS.Certificates[0].Certificate[0])
+	return hex.EncodeToString(sum[:])
+}
+
+func formatColonFingerprint(bare string) string {
+	upper := strings.ToUpper(bare)
+	parts := make([]string, 0, len(upper)/2)
+	for i := 0; i < len(upper); i += 2 {
+		parts = append(parts, upper[i:i+2])
+	}
+	return strings.Join(parts, ":")
+}
+
+func TestNewHTTPClientTLSCertFingerprintPinning(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "pinned-ok")
+	}))
+	defer srv.Close()
+
+	fp := certFingerprintHex(t, srv)
+
+	// Without pin, Go's default transport rejects the self-signed cert.
+	unpinned, err := NewHTTPClient(config.MCPServerConfig{URL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewHTTPClient unpinned: %v", err)
+	}
+	if resp, err := unpinned.Get(srv.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected self-signed cert to fail without tls_cert_fingerprint")
+	}
+
+	// Matching fingerprint (bare, colon-separated, and sha256: prefixed) succeeds.
+	for _, format := range []string{fp, "sha256:" + fp, "SHA256:" + formatColonFingerprint(fp)} {
+		client, err := NewHTTPClient(config.MCPServerConfig{
+			URL:                srv.URL,
+			TLSCertFingerprint: format,
+		})
+		if err != nil {
+			t.Fatalf("NewHTTPClient(%q): %v", format, err)
+		}
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("GET with valid pin %q: %v", format, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+	}
+
+	// Wrong fingerprint fails handshake.
+	wrongFP := strings.Repeat("00", 32)
+	if wrongFP == fp {
+		wrongFP = strings.Repeat("ff", 32)
+	}
+	badClient, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                srv.URL,
+		TLSCertFingerprint: wrongFP,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient wrong pin: %v", err)
+	}
+	if resp, err := badClient.Get(srv.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected mismatched tls_cert_fingerprint to fail TLS handshake")
+	} else if !strings.Contains(err.Error(), "fingerprint mismatch") {
+		t.Fatalf("unexpected mismatch error: %v", err)
+	}
+}
+
+func TestNewHTTPClientRejectsPinOnPlainHTTP(t *testing.T) {
+	_, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                "http://127.0.0.1:5648/mcp",
+		TLSCertFingerprint: strings.Repeat("ab", 32),
+	})
+	if err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("expected https error for pin on plain http, got %v", err)
+	}
+}
+
+func TestNewHTTPClientPinnedPreservesRedirectPolicy(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	var redirectTo string
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTo, http.StatusTemporaryRedirect)
+	}))
+	defer secure.Close()
+
+	client, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                secure.URL,
+		TLSCertFingerprint: certFingerprintHex(t, secure),
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient pinned: %v", err)
+	}
+
+	// Cross-origin redirect must not be followed.
+	redirectTo = target.URL
+	resp, err := client.Get(secure.URL)
+	if err != nil {
+		t.Fatalf("GET cross-origin redirect: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || targetHits.Load() != 0 {
+		t.Fatalf("cross-origin redirect followed: status=%d targetHits=%d", resp.StatusCode, targetHits.Load())
+	}
+
+	// Scheme downgrade on same host must not be followed.
+	redirectTo = strings.Replace(secure.URL, "https://", "http://", 1) + "/downgrade"
+	resp, err = client.Get(secure.URL)
+	if err != nil {
+		t.Fatalf("GET scheme downgrade: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("scheme downgrade redirect followed: status=%d", resp.StatusCode)
+	}
+}
+
+func TestResolveHeaders(t *testing.T) {
+	t.Run("expands env vars in single pass without mutating config", func(t *testing.T) {
+		t.Setenv("TEST_MCP_SECRET", "  tok${with}braces  ")
+		t.Setenv("TEST_MCP_EXTRA", "v1")
+		orig := map[string]string{
+			"Authorization": "Bearer ${TEST_MCP_SECRET}",
+			"X-Pair":        "${TEST_MCP_EXTRA}:${TEST_MCP_EXTRA}",
+			"X-Literal":     "plain-value",
+		}
+		cfg := config.MCPServerConfig{Headers: orig}
+
+		got, err := ResolveHeaders(cfg)
+		if err != nil {
+			t.Fatalf("ResolveHeaders: %v", err)
+		}
+		if got["Authorization"] != "Bearer tok${with}braces" {
+			t.Fatalf("Authorization = %q, want %q", got["Authorization"], "Bearer tok${with}braces")
+		}
+		if got["X-Pair"] != "v1:v1" {
+			t.Fatalf("X-Pair = %q, want v1:v1", got["X-Pair"])
+		}
+		if got["X-Literal"] != "plain-value" {
+			t.Fatalf("X-Literal = %q, want plain-value", got["X-Literal"])
+		}
+		if orig["Authorization"] != "Bearer ${TEST_MCP_SECRET}" {
+			t.Fatalf("ResolveHeaders mutated cfg.Headers: %q", orig["Authorization"])
+		}
+	})
+
+	t.Run("fails closed on unset, blank, or malformed placeholder", func(t *testing.T) {
+		t.Setenv("TEST_BLANK_MCP_VAR", "   \t  ")
+		for _, val := range []string{
+			"Bearer ${UNSET_MCP_VAR_12345}",
+			"Bearer ${TEST_BLANK_MCP_VAR}",
+			"Bearer ${UNCLOSED",
+			"Bearer ${BAD-NAME}",
+			"Bearer ${}",
+		} {
+			_, err := ResolveHeaders(config.MCPServerConfig{
+				Headers: map[string]string{"Authorization": val},
+			})
+			if err == nil {
+				t.Fatalf("ResolveHeaders(%q) succeeded, want error", val)
+			}
+		}
+	})
+
+	t.Run("fails closed on whitespace-only bearer_token_file and tls_cert_fingerprint", func(t *testing.T) {
+		if _, err := ResolveHeaders(config.MCPServerConfig{BearerTokenFile: "   "}); err == nil {
+			t.Fatal("ResolveHeaders with whitespace-only BearerTokenFile succeeded, want error")
+		}
+		if _, err := NewHTTPClient(config.MCPServerConfig{
+			URL:                "https://127.0.0.1:5648/mcp",
+			TLSCertFingerprint: "   ",
+		}); err == nil {
+			t.Fatal("NewHTTPClient with whitespace-only TLSCertFingerprint succeeded, want error")
+		}
+	})
+
+	t.Run("resolves bearer_token_env and bearer_token_file", func(t *testing.T) {
+		t.Setenv("TEST_BEARER_ENV", "  env-secret-token  ")
+		got, err := ResolveHeaders(config.MCPServerConfig{
+			BearerTokenEnv: "TEST_BEARER_ENV",
+		})
+		if err != nil {
+			t.Fatalf("ResolveHeaders env: %v", err)
+		}
+		if got["Authorization"] != "Bearer env-secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer env-secret-token", got["Authorization"])
+		}
+
+		tokenFile := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(tokenFile, []byte("file-secret-token\n"), 0o600); err != nil {
+			t.Fatalf("write token file: %v", err)
+		}
+		got, err = ResolveHeaders(config.MCPServerConfig{
+			BearerTokenEnv:  "UNSET_BEARER_FALLBACK_12345",
+			BearerTokenFile: tokenFile,
+		})
+		if err != nil {
+			t.Fatalf("ResolveHeaders file fallback: %v", err)
+		}
+		if got["Authorization"] != "Bearer file-secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer file-secret-token", got["Authorization"])
+		}
+	})
+
+	t.Run("rejects conflicting Authorization header", func(t *testing.T) {
+		t.Setenv("TEST_BEARER_CONFLICT", "secret")
+		_, err := ResolveHeaders(config.MCPServerConfig{
+			BearerTokenEnv: "TEST_BEARER_CONFLICT",
+			Headers:        map[string]string{"authorization": "Bearer other"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "cannot set both") {
+			t.Fatalf("expected conflict error, got %v", err)
+		}
+	})
+}
+
+func TestConnectHTTPWithPinnedTLSAndBearerTokenEnv(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	netutil.AllowInternalHost("127.0.0.1")
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	const wantToken = "secret-pinned-token-42"
+	t.Setenv("TEST_PINNED_MCP_TOKEN", wantToken)
+
+	mcpSrv := mcpserver.NewMCPServer("test-pinned", "0.1.0", mcpserver.WithToolCapabilities(false))
+	mcpSrv.AddTool(
+		mcp.NewTool("query_device_info", mcp.WithDescription("test tool")),
+		func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("device-ok"), nil
+		},
+	)
+	streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+wantToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		streamSrv.ServeHTTP(w, r)
+	}))
+
+	tlsSrv := httptest.NewTLSServer(mux)
+	defer tlsSrv.Close()
+
+	sc, err := connectHTTP(context.Background(), "local_app", config.MCPServerConfig{
+		Transport:          "http",
+		URL:                tlsSrv.URL + "/mcp",
+		BearerTokenEnv:     "TEST_PINNED_MCP_TOKEN",
+		TLSCertFingerprint: "sha256:" + formatColonFingerprint(certFingerprintHex(t, tlsSrv)),
+	})
+	if err != nil {
+		t.Fatalf("connectHTTP: %v", err)
+	}
+	defer sc.Close()
+
+	if !sc.Connected() {
+		t.Fatalf("expected connected server, err=%v", sc.Err)
+	}
+	if sc.ToolCount() != 1 || sc.Tools[0].Name != "query_device_info" {
+		t.Fatalf("tools = %+v, want [query_device_info]", sc.Tools)
+	}
+}
+
+// TestConnectHTTPCloseDeleteCarriesAuthorization forces the legacy session
+// handshake. mcp-go omits configured headers on the session DELETE that
+// Close sends; the client's transport has to attach them.
+func TestConnectHTTPCloseDeleteCarriesAuthorization(t *testing.T) {
+	netutil.ResetInternalAllowlist()
+	netutil.AllowInternalHost("127.0.0.1")
+	t.Cleanup(netutil.ResetInternalAllowlist)
+
+	const wantToken = "delete-bearer-token"
+	t.Setenv("TEST_DELETE_MCP_TOKEN", wantToken)
+
+	mcpSrv := mcpserver.NewMCPServer("test-delete", "0.1.0", mcpserver.WithToolCapabilities(false))
+	streamSrv := mcpserver.NewStreamableHTTPServer(mcpSrv)
+
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal(body, &msg) == nil && msg.Method == "server/discover" {
+			w.Header().Set("Content-Type", "application/json")
+			id := msg.ID
+			if len(id) == 0 {
+				id = json.RawMessage("null")
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}`, id)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		streamSrv.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	sc, err := connectHTTP(context.Background(), "legacy_app", config.MCPServerConfig{
+		Transport:      "http",
+		URL:            srv.URL + "/mcp",
+		BearerTokenEnv: "TEST_DELETE_MCP_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("connectHTTP: %v", err)
+	}
+	if sc == nil || !sc.Connected() {
+		var connectErr error
+		if sc != nil {
+			connectErr = sc.Err
+		}
+		t.Fatalf("expected legacy session connected, err=%v", connectErr)
+	}
+	if err := sc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var deleteAuth string
+	sawDelete := false
+	for _, line := range seen {
+		if strings.HasPrefix(line, http.MethodDelete+" ") {
+			sawDelete = true
+			deleteAuth = strings.TrimPrefix(line, http.MethodDelete+" ")
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("Close sent no DELETE; requests=%v", seen)
+	}
+	if deleteAuth != "Bearer "+wantToken {
+		t.Fatalf("DELETE Authorization = %q, want Bearer token", deleteAuth)
+	}
+}
+
+func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	// The proxy is addressed by a DNS name. Go leaves ConnectionState.ServerName
+	// empty for an IP, and an empty name stays on the origin pin path.
+	proxyListen, proxyCert := startHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	roots := x509.NewCertPool()
+	roots.AddCert(proxyCert)
+	proxyURL := "https://proxy.example.com:" + mustPort(t, proxyListen)
+	originURL := "https://origin.test/hello"
+	originPin := "sha256:" + certFingerprintHex(t, origin)
+
+	okClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: originPin,
+	}, roots)
+	if err != nil {
+		t.Fatalf("newHTTPClientWithProxyRoots: %v", err)
+	}
+	setTestProxy(t, okClient, proxyURL)
+	okClient.Timeout = 5 * time.Second
+
+	resp, err := okClient.Get(originURL)
+	if err != nil {
+		t.Fatalf("pinned origin through HTTPS proxy: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "origin-ok" {
+		t.Fatalf("status=%d body=%q, want 200 origin-ok", resp.StatusCode, body)
+	}
+
+	wrong := originPin
+	if wrong[len("sha256:")] == '0' {
+		wrong = "sha256:1" + wrong[len("sha256:")+1:]
+	} else {
+		wrong = "sha256:0" + wrong[len("sha256:"):][1:]
+	}
+	badClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: wrong,
+	}, roots)
+	if err != nil {
+		t.Fatalf("newHTTPClientWithProxyRoots wrong pin: %v", err)
+	}
+	setTestProxy(t, badClient, proxyURL)
+	badClient.Timeout = 5 * time.Second
+	if resp, err := badClient.Get(originURL); err == nil {
+		resp.Body.Close()
+		t.Fatal("wrong origin pin succeeded through the HTTPS proxy")
+	}
+
+	untrustedListen := startUntrustedHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	untrustedURL := "https://untrusted.example.com:" + mustPort(t, untrustedListen)
+	untrustedClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: originPin,
+	}, roots)
+	if err != nil {
+		t.Fatalf("newHTTPClientWithProxyRoots untrusted proxy: %v", err)
+	}
+	setTestProxy(t, untrustedClient, untrustedURL)
+	untrustedClient.Timeout = 5 * time.Second
+	resp, err = untrustedClient.Get(originURL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("untrusted proxy certificate was accepted")
+	}
+	if !strings.Contains(err.Error(), "tls proxy certificate verification failed") {
+		t.Fatalf("untrusted proxy error = %v, want proxy certificate verification failure", err)
+	}
+}
+
+func setTestProxy(t *testing.T, client *http.Client, proxyRaw string) {
+	t.Helper()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", client.Transport)
+	}
+	parsed, err := url.Parse(proxyRaw)
+	if err != nil {
+		t.Fatalf("proxy URL: %v", err)
+	}
+	tr.Proxy = func(*http.Request) (*url.URL, error) { return parsed, nil }
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if host == "proxy.example.com" || host == "untrusted.example.com" {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
+}
+
+func mustPort(t *testing.T, listenAddr string) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		t.Fatalf("proxy listen address %q: %v", listenAddr, err)
+	}
+	return port
+}
+
+func startHTTPSConnectProxy(t *testing.T, originAddr string) (string, *x509.Certificate) {
+	t.Helper()
+	mint := httptest.NewTLSServer(http.NewServeMux())
+	cert := mint.Certificate()
+	if cert == nil {
+		t.Fatal("test proxy certificate is nil")
+	}
+	certs := mint.TLS.Certificates
+	mint.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	return serveConnectProxy(t, originAddr, ln, certs), cert
+}
+
+func startUntrustedHTTPSConnectProxy(t *testing.T, originAddr string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	return serveConnectProxy(t, originAddr, ln, []tls.Certificate{mintUntrustedProxyCert(t)})
+}
+
+func serveConnectProxy(t *testing.T, originAddr string, ln net.Listener, certs []tls.Certificate) string {
+	t.Helper()
+	tlsLn := tls.NewListener(ln, &tls.Config{Certificates: certs})
+	t.Cleanup(func() { _ = tlsLn.Close() })
+
+	go func() {
+		for {
+			conn, err := tlsLn.Accept()
+			if err != nil {
+				return
+			}
+			go handleConnectProxy(conn, originAddr)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func mintUntrustedProxyCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("proxy key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "untrusted-proxy.example"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"untrusted.example.com"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("proxy certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func handleConnectProxy(conn net.Conn, originAddr string) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	if req.Method != http.MethodConnect {
+		_, _ = io.WriteString(conn, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	dest, err := net.DialTimeout("tcp", originAddr, 2*time.Second)
+	if err != nil {
+		_, _ = io.WriteString(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
+	_ = dest.SetDeadline(time.Time{})
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(dest, br)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(conn, dest)
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+// mintTestCA returns a self-signed CA plus its certificate, so tests can sign
+// proxy leaves that a client is configured to trust.
+func mintTestCA(t *testing.T) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("test CA key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "axis-test-proxy-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("test CA certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse test CA: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: cert}, cert
+}
+
+// mintProxyLeaf signs a proxy leaf certificate with ca for the given DNS names.
+func mintProxyLeaf(t *testing.T, ca tls.Certificate, caCert *x509.Certificate, dnsNames ...string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("proxy leaf key: %v", err)
+	}
+	signer, ok := ca.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatalf("test CA key type %T is not a crypto.Signer", ca.PrivateKey)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: dnsNames[0]},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, caCert, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatalf("proxy leaf certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// dialHostTo points every request for host at addr, leaving other dials alone.
+func dialHostTo(t *testing.T, client *http.Client, host, addr string) {
+	t.Helper()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", client.Transport)
+	}
+	want := strings.ToLower(strings.TrimSuffix(host, "."))
+	tr.DialContext = func(ctx context.Context, network, dialAddr string) (net.Conn, error) {
+		h, _, err := net.SplitHostPort(dialAddr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.ToLower(strings.TrimSuffix(h, ".")) == want {
+			dialAddr = addr
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, dialAddr)
+	}
+}
+
+// flippedPin returns pin with one hex digit changed, so the pin branch is
+// reached and fails on the digest instead of the CA chain.
+func flippedPin(pin string) string {
+	const prefix = "sha256:"
+	body := strings.TrimPrefix(pin, prefix)
+	if strings.HasPrefix(body, "0") {
+		return prefix + "1" + body[1:]
+	}
+	return prefix + "0" + body[1:]
+}
+
+// TestPinnedTLSHostSpellingsStayOnPinBranch proves the origin comparison
+// canonicalises letter case and a trailing dot. With a deliberately wrong pin the
+// two branches report different errors: a host spelling that canonicalises to the
+// origin fails on the digest ("tls certificate fingerprint mismatch"), while a
+// spelling that falls through to CA trust fails as a proxy verification error
+// against a self-signed origin. The test asserts the former for every spelling.
+func TestPinnedTLSHostSpellingsStayOnPinBranch(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	wrongPin := flippedPin("sha256:" + certFingerprintHex(t, origin))
+	originAddr := origin.Listener.Addr().String()
+
+	for _, host := range []string{"origin.example.com", "ORIGIN.example.com", "origin.example.com."} {
+		t.Run(host, func(t *testing.T) {
+			url := "https://" + host + "/hello"
+			client, err := NewHTTPClient(config.MCPServerConfig{
+				URL:                url,
+				TLSCertFingerprint: wrongPin,
+			})
+			if err != nil {
+				t.Fatalf("NewHTTPClient: %v", err)
+			}
+			dialHostTo(t, client, "origin.example.com", originAddr)
+			client.Timeout = 5 * time.Second
+
+			resp, err := client.Get(url)
+			if err == nil {
+				resp.Body.Close()
+				t.Fatalf("%s: wrong pin accepted", host)
+			}
+			if !strings.Contains(err.Error(), "tls certificate fingerprint mismatch") {
+				t.Fatalf("%s: error = %v, want the origin pin branch", host, err)
+			}
+		})
+	}
+}
+
+// TestPinnedTLSRejectsTrustedProxyWithWrongHostname covers the case the
+// untrusted-proxy test misses: the proxy certificate chains to the CA the client
+// trusts but names a host other than the one dialled, so x509.Verify must reject
+// it on DNSName rather than on chain trust.
+func TestPinnedTLSRejectsTrustedProxyWithWrongHostname(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	ca, caCert := mintTestCA(t)
+	leaf := mintProxyLeaf(t, ca, caCert, "other.example.com")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	proxyListen := serveConnectProxy(t, origin.Listener.Addr().String(), ln, []tls.Certificate{leaf})
+
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+
+	originURL := "https://origin.test/hello"
+	client, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: "sha256:" + certFingerprintHex(t, origin),
+	}, roots)
+	if err != nil {
+		t.Fatalf("newHTTPClientWithProxyRoots: %v", err)
+	}
+	setTestProxy(t, client, "https://proxy.example.com:"+mustPort(t, proxyListen))
+	client.Timeout = 5 * time.Second
+
+	resp, err := client.Get(originURL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("trusted CA with a non-matching hostname was accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "tls proxy certificate verification failed") {
+		t.Fatalf("error = %v, want proxy certificate verification failure", msg)
+	}
+	if !strings.Contains(msg, "other.example.com") {
+		t.Fatalf("error = %v, want a hostname mismatch naming other.example.com", msg)
 	}
 }

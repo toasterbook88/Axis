@@ -118,3 +118,45 @@ func TestMCPDispatchAsksUnlessAllowlisted(t *testing.T) {
 		t.Fatalf("only the allowlisted tool may reach the server, called=%v", server.called)
 	}
 }
+
+func TestMCPAutoApprovalIgnoresReadOnlyHintForUnlistedWriteTool(t *testing.T) {
+	server := &recordingMCPClient{}
+	readOnlyTrue := true
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "localapp",
+		InitResult: &mcp.InitializeResult{},
+		Client:     server,
+		Config: config.MCPServerConfig{
+			AutoApproveTools: []string{
+				"query_device_info",
+				"query_logs",
+				"search_user_context",
+				"search_skills",
+				"analyze_development_context",
+			},
+		},
+		Tools: []mcp.Tool{
+			{Name: "search_skills", InputSchema: mcp.ToolInputSchema{Type: "object"}},
+			{
+				Name:        "propose_library_item",
+				InputSchema: mcp.ToolInputSchema{Type: "object"},
+				Annotations: mcp.ToolAnnotation{ReadOnlyHint: &readOnlyTrue},
+			},
+		},
+	})
+
+	a := New(Config{
+		Backend:     &scriptedBackend{},
+		MCPRegistry: reg,
+		Output:      io.Discard,
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+
+	if !a.ToolAutoApproved("mcp_localapp_search_skills") {
+		t.Fatal("allowlisted mcp_localapp_search_skills should be auto-approved")
+	}
+	if a.ToolAutoApproved("mcp_localapp_propose_library_item") {
+		t.Fatal("unlisted mcp_localapp_propose_library_item must require confirmation even with ReadOnlyHint=true")
+	}
+}

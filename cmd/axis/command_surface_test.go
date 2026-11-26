@@ -146,12 +146,12 @@ func TestScriptsListCommandPrintsRegistry(t *testing.T) {
 
 func TestMCPServeCmdRejectsUnsupportedTransport(t *testing.T) {
 	cmd := mcpServeCmd()
-	cmd.SetArgs([]string{"--transport", "http"})
+	cmd.SetArgs([]string{"--transport", "sse"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected unsupported transport error")
 	}
-	if !strings.Contains(err.Error(), `unsupported transport "http"`) {
+	if !strings.Contains(err.Error(), `unsupported transport "sse"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -172,6 +172,59 @@ func TestMCPServeCmdCallsServeStdio(t *testing.T) {
 	cmd.SetArgs([]string{"--cached", "--cache-addr", "127.0.0.1:5000"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("mcp serve Execute: %v", err)
+	}
+}
+
+func TestMCPServeCmdCallsServeHTTP(t *testing.T) {
+	restore := stubServeMCPHTTP(t, func(ctx context.Context, addr string, cached bool, cacheAddr string, tokenEnv string, allowInsecure bool) error {
+		if allowInsecure {
+			t.Fatal("expected allowInsecure=false")
+		}
+		if ctx == nil {
+			t.Fatal("expected non-nil context")
+		}
+		if addr != "127.0.0.1:42499" {
+			t.Fatalf("addr = %q, want 127.0.0.1:42499", addr)
+		}
+		if !cached {
+			t.Fatal("expected cached=true")
+		}
+		if cacheAddr != "127.0.0.1:5000" {
+			t.Fatalf("cache addr = %q, want 127.0.0.1:5000", cacheAddr)
+		}
+		if tokenEnv != "AXIS_MCP_TOKEN" {
+			t.Fatalf("tokenEnv = %q, want AXIS_MCP_TOKEN", tokenEnv)
+		}
+		return nil
+	})
+	defer restore()
+
+	cmd := mcpServeCmd()
+	cmd.SetArgs([]string{"--transport", "http", "--addr", "127.0.0.1:42499", "--cached", "--cache-addr", "127.0.0.1:5000", "--token-env", "AXIS_MCP_TOKEN"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mcp serve --transport http Execute: %v", err)
+	}
+}
+
+func TestMCPServeCmdAllowInsecureHTTP(t *testing.T) {
+	restore := stubServeMCPHTTP(t, func(ctx context.Context, addr string, cached bool, cacheAddr string, tokenEnv string, allowInsecure bool) error {
+		if !allowInsecure {
+			t.Fatal("expected allowInsecure=true")
+		}
+		if addr != "192.0.2.10:42499" {
+			t.Fatalf("addr = %q, want 192.0.2.10:42499", addr)
+		}
+		if tokenEnv != "AXIS_MCP_TOKEN" {
+			t.Fatalf("tokenEnv = %q, want AXIS_MCP_TOKEN", tokenEnv)
+		}
+		return nil
+	})
+	defer restore()
+
+	cmd := mcpServeCmd()
+	cmd.SetArgs([]string{"--transport", "http", "--addr", "192.0.2.10:42499", "--token-env", "AXIS_MCP_TOKEN", "--allow-insecure-http"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mcp serve --allow-insecure-http Execute: %v", err)
 	}
 }
 
@@ -803,6 +856,15 @@ func stubServeMCPStdio(t *testing.T, fn func(bool, string) error) func() {
 	serveMCPStdio = fn
 	return func() {
 		serveMCPStdio = prev
+	}
+}
+
+func stubServeMCPHTTP(t *testing.T, fn func(context.Context, string, bool, string, string, bool) error) func() {
+	t.Helper()
+	prev := serveMCPHTTP
+	serveMCPHTTP = fn
+	return func() {
+		serveMCPHTTP = prev
 	}
 }
 
