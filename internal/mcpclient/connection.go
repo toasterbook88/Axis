@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,11 @@ import (
 	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/secrets"
 )
+
+// nonOriginVerifyRoots is the trust pool for a TLS handshake whose ServerName
+// is not the origin. Nil selects the system roots inside x509.Verify. Tests
+// set it so a local proxy CA is trusted; production leaves it nil.
+var nonOriginVerifyRoots *x509.CertPool
 
 // ServerConnection holds the state of a single MCP server connection.
 type ServerConnection struct {
@@ -254,14 +260,14 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 		// InsecureSkipVerify bypasses system CA chain validation for self-signed
 		// local certificates; authenticity is enforced strictly by
 		// VerifyConnection pinning the origin leaf DER SHA-256 digest below.
-		// An HTTPS proxy handshake carries the proxy's ServerName. Skip the
-		// pin only for a non-empty name that is not the origin. An empty
-		// name is pinned: an IP origin often omits ServerName, and skipping
-		// it would accept any certificate.
+		// An HTTPS proxy handshake carries the proxy's ServerName. That
+		// handshake is checked with x509.Verify instead of the origin pin.
+		// An empty name is pinned: an IP origin often omits ServerName, and
+		// skipping it would accept any certificate.
 		InsecureSkipVerify: true, //nolint:gosec
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if cs.ServerName != "" && !strings.EqualFold(cs.ServerName, targetHost) {
-				return nil
+				return verifyNonOriginCertificate(cs, nonOriginVerifyRoots)
 			}
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
@@ -279,6 +285,30 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 	}
 	client.Transport = tr
 	return client, nil
+}
+
+// verifyNonOriginCertificate checks an HTTPS proxy handshake. The origin pin
+// does not apply here. A nil root pool makes x509.Verify use the system roots.
+func verifyNonOriginCertificate(cs tls.ConnectionState, rootCAs *x509.CertPool) error {
+	if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0] == nil {
+		return fmt.Errorf("tls proxy certificate verification failed: peer presented no certificate")
+	}
+	leaf := cs.PeerCertificates[0]
+	intermediates := x509.NewCertPool()
+	for _, cert := range cs.PeerCertificates[1:] {
+		if cert != nil {
+			intermediates.AddCert(cert)
+		}
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       cs.ServerName,
+		Intermediates: intermediates,
+		Roots:         rootCAs,
+	}
+	if _, err := leaf.Verify(opts); err != nil {
+		return fmt.Errorf("tls proxy certificate verification failed: %w", err)
+	}
+	return nil
 }
 
 // ResolveHeaders returns a fresh HTTP header map for cfg without mutating

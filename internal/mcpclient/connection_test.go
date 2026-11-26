@@ -4,12 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -483,7 +489,13 @@ func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	proxyURL := startHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	// The proxy is addressed by a DNS name. Go leaves ConnectionState.ServerName
+	// empty for an IP, and an empty name stays on the origin pin path.
+	proxyListen, proxyCert := startHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	roots := x509.NewCertPool()
+	roots.AddCert(proxyCert)
+	setNonOriginVerifyRoots(t, roots)
+	proxyURL := "https://proxy.example.com:" + mustPort(t, proxyListen)
 	originURL := "https://origin.test/hello"
 	originPin := "sha256:" + certFingerprintHex(t, origin)
 
@@ -526,6 +538,26 @@ func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
 		resp.Body.Close()
 		t.Fatal("wrong origin pin succeeded through the HTTPS proxy")
 	}
+
+	untrustedListen := startUntrustedHTTPSConnectProxy(t, origin.Listener.Addr().String())
+	untrustedURL := "https://untrusted.example.com:" + mustPort(t, untrustedListen)
+	untrustedClient, err := NewHTTPClient(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: originPin,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient untrusted proxy: %v", err)
+	}
+	setTestProxy(t, untrustedClient, untrustedURL)
+	untrustedClient.Timeout = 5 * time.Second
+	resp, err = untrustedClient.Get(originURL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("untrusted proxy certificate was accepted")
+	}
+	if !strings.Contains(err.Error(), "tls proxy certificate verification failed") {
+		t.Fatalf("untrusted proxy error = %v, want proxy certificate verification failure", err)
+	}
 }
 
 func setTestProxy(t *testing.T, client *http.Client, proxyRaw string) {
@@ -539,30 +571,99 @@ func setTestProxy(t *testing.T, client *http.Client, proxyRaw string) {
 		t.Fatalf("proxy URL: %v", err)
 	}
 	tr.Proxy = func(*http.Request) (*url.URL, error) { return parsed, nil }
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if host == "proxy.example.com" || host == "untrusted.example.com" {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
 }
 
-func startHTTPSConnectProxy(t *testing.T, originAddr string) string {
+func mustPort(t *testing.T, listenAddr string) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		t.Fatalf("proxy listen address %q: %v", listenAddr, err)
+	}
+	return port
+}
+
+func setNonOriginVerifyRoots(t *testing.T, roots *x509.CertPool) {
+	t.Helper()
+	prev := nonOriginVerifyRoots
+	nonOriginVerifyRoots = roots
+	t.Cleanup(func() { nonOriginVerifyRoots = prev })
+}
+
+func startHTTPSConnectProxy(t *testing.T, originAddr string) (string, *x509.Certificate) {
 	t.Helper()
 	mint := httptest.NewTLSServer(http.NewServeMux())
+	cert := mint.Certificate()
+	if cert == nil {
+		t.Fatal("test proxy certificate is nil")
+	}
 	certs := mint.TLS.Certificates
 	mint.Close()
-
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: certs})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
+	return serveConnectProxy(t, originAddr, ln, certs), cert
+}
+
+func startUntrustedHTTPSConnectProxy(t *testing.T, originAddr string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	return serveConnectProxy(t, originAddr, ln, []tls.Certificate{mintUntrustedProxyCert(t)})
+}
+
+func serveConnectProxy(t *testing.T, originAddr string, ln net.Listener, certs []tls.Certificate) string {
+	t.Helper()
+	tlsLn := tls.NewListener(ln, &tls.Config{Certificates: certs})
+	t.Cleanup(func() { _ = tlsLn.Close() })
 
 	go func() {
 		for {
-			conn, err := ln.Accept()
+			conn, err := tlsLn.Accept()
 			if err != nil {
 				return
 			}
 			go handleConnectProxy(conn, originAddr)
 		}
 	}()
-	return "https://" + ln.Addr().String()
+	return ln.Addr().String()
+}
+
+func mintUntrustedProxyCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("proxy key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "untrusted-proxy.example"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"untrusted.example.com"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("proxy certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 func handleConnectProxy(conn net.Conn, originAddr string) {
