@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -494,17 +495,16 @@ func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
 	proxyListen, proxyCert := startHTTPSConnectProxy(t, origin.Listener.Addr().String())
 	roots := x509.NewCertPool()
 	roots.AddCert(proxyCert)
-	setNonOriginVerifyRoots(t, roots)
 	proxyURL := "https://proxy.example.com:" + mustPort(t, proxyListen)
 	originURL := "https://origin.test/hello"
 	originPin := "sha256:" + certFingerprintHex(t, origin)
 
-	okClient, err := NewHTTPClient(config.MCPServerConfig{
+	okClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
 		URL:                originURL,
 		TLSCertFingerprint: originPin,
-	})
+	}, roots)
 	if err != nil {
-		t.Fatalf("NewHTTPClient: %v", err)
+		t.Fatalf("newHTTPClientWithProxyRoots: %v", err)
 	}
 	setTestProxy(t, okClient, proxyURL)
 	okClient.Timeout = 5 * time.Second
@@ -525,12 +525,12 @@ func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
 	} else {
 		wrong = "sha256:0" + wrong[len("sha256:"):][1:]
 	}
-	badClient, err := NewHTTPClient(config.MCPServerConfig{
+	badClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
 		URL:                originURL,
 		TLSCertFingerprint: wrong,
-	})
+	}, roots)
 	if err != nil {
-		t.Fatalf("NewHTTPClient wrong pin: %v", err)
+		t.Fatalf("newHTTPClientWithProxyRoots wrong pin: %v", err)
 	}
 	setTestProxy(t, badClient, proxyURL)
 	badClient.Timeout = 5 * time.Second
@@ -541,12 +541,12 @@ func TestPinnedTLSAllowsHTTPSProxyWithDifferentCertificate(t *testing.T) {
 
 	untrustedListen := startUntrustedHTTPSConnectProxy(t, origin.Listener.Addr().String())
 	untrustedURL := "https://untrusted.example.com:" + mustPort(t, untrustedListen)
-	untrustedClient, err := NewHTTPClient(config.MCPServerConfig{
+	untrustedClient, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
 		URL:                originURL,
 		TLSCertFingerprint: originPin,
-	})
+	}, roots)
 	if err != nil {
-		t.Fatalf("NewHTTPClient untrusted proxy: %v", err)
+		t.Fatalf("newHTTPClientWithProxyRoots untrusted proxy: %v", err)
 	}
 	setTestProxy(t, untrustedClient, untrustedURL)
 	untrustedClient.Timeout = 5 * time.Second
@@ -591,13 +591,6 @@ func mustPort(t *testing.T, listenAddr string) string {
 		t.Fatalf("proxy listen address %q: %v", listenAddr, err)
 	}
 	return port
-}
-
-func setNonOriginVerifyRoots(t *testing.T, roots *x509.CertPool) {
-	t.Helper()
-	prev := nonOriginVerifyRoots
-	nonOriginVerifyRoots = roots
-	t.Cleanup(func() { nonOriginVerifyRoots = prev })
 }
 
 func startHTTPSConnectProxy(t *testing.T, originAddr string) (string, *x509.Certificate) {
@@ -699,4 +692,178 @@ func handleConnectProxy(conn net.Conn, originAddr string) {
 		done <- struct{}{}
 	}()
 	<-done
+}
+
+// mintTestCA returns a self-signed CA plus its certificate, so tests can sign
+// proxy leaves that a client is configured to trust.
+func mintTestCA(t *testing.T) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("test CA key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "axis-test-proxy-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("test CA certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse test CA: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: cert}, cert
+}
+
+// mintProxyLeaf signs a proxy leaf certificate with ca for the given DNS names.
+func mintProxyLeaf(t *testing.T, ca tls.Certificate, caCert *x509.Certificate, dnsNames ...string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("proxy leaf key: %v", err)
+	}
+	signer, ok := ca.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatalf("test CA key type %T is not a crypto.Signer", ca.PrivateKey)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: dnsNames[0]},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, caCert, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatalf("proxy leaf certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// dialHostTo points every request for host at addr, leaving other dials alone.
+func dialHostTo(t *testing.T, client *http.Client, host, addr string) {
+	t.Helper()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", client.Transport)
+	}
+	want := strings.ToLower(strings.TrimSuffix(host, "."))
+	tr.DialContext = func(ctx context.Context, network, dialAddr string) (net.Conn, error) {
+		h, _, err := net.SplitHostPort(dialAddr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.ToLower(strings.TrimSuffix(h, ".")) == want {
+			dialAddr = addr
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, dialAddr)
+	}
+}
+
+// flippedPin returns pin with one hex digit changed, so the pin branch is
+// reached and fails on the digest instead of the CA chain.
+func flippedPin(pin string) string {
+	const prefix = "sha256:"
+	body := strings.TrimPrefix(pin, prefix)
+	if strings.HasPrefix(body, "0") {
+		return prefix + "1" + body[1:]
+	}
+	return prefix + "0" + body[1:]
+}
+
+// TestPinnedTLSHostSpellingsStayOnPinBranch proves the origin comparison
+// canonicalises letter case and a trailing dot. With a deliberately wrong pin the
+// two branches report different errors: a host spelling that canonicalises to the
+// origin fails on the digest ("tls certificate fingerprint mismatch"), while a
+// spelling that falls through to CA trust fails as a proxy verification error
+// against a self-signed origin. The test asserts the former for every spelling.
+func TestPinnedTLSHostSpellingsStayOnPinBranch(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	wrongPin := flippedPin("sha256:" + certFingerprintHex(t, origin))
+	originAddr := origin.Listener.Addr().String()
+
+	for _, host := range []string{"origin.example.com", "ORIGIN.example.com", "origin.example.com."} {
+		t.Run(host, func(t *testing.T) {
+			url := "https://" + host + "/hello"
+			client, err := NewHTTPClient(config.MCPServerConfig{
+				URL:                url,
+				TLSCertFingerprint: wrongPin,
+			})
+			if err != nil {
+				t.Fatalf("NewHTTPClient: %v", err)
+			}
+			dialHostTo(t, client, "origin.example.com", originAddr)
+			client.Timeout = 5 * time.Second
+
+			resp, err := client.Get(url)
+			if err == nil {
+				resp.Body.Close()
+				t.Fatalf("%s: wrong pin accepted", host)
+			}
+			if !strings.Contains(err.Error(), "tls certificate fingerprint mismatch") {
+				t.Fatalf("%s: error = %v, want the origin pin branch", host, err)
+			}
+		})
+	}
+}
+
+// TestPinnedTLSRejectsTrustedProxyWithWrongHostname covers the case the
+// untrusted-proxy test misses: the proxy certificate chains to the CA the client
+// trusts but names a host other than the one dialled, so x509.Verify must reject
+// it on DNSName rather than on chain trust.
+func TestPinnedTLSRejectsTrustedProxyWithWrongHostname(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "origin-ok")
+	}))
+	defer origin.Close()
+
+	ca, caCert := mintTestCA(t)
+	leaf := mintProxyLeaf(t, ca, caCert, "other.example.com")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	proxyListen := serveConnectProxy(t, origin.Listener.Addr().String(), ln, []tls.Certificate{leaf})
+
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+
+	originURL := "https://origin.test/hello"
+	client, err := newHTTPClientWithProxyRoots(config.MCPServerConfig{
+		URL:                originURL,
+		TLSCertFingerprint: "sha256:" + certFingerprintHex(t, origin),
+	}, roots)
+	if err != nil {
+		t.Fatalf("newHTTPClientWithProxyRoots: %v", err)
+	}
+	setTestProxy(t, client, "https://proxy.example.com:"+mustPort(t, proxyListen))
+	client.Timeout = 5 * time.Second
+
+	resp, err := client.Get(originURL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("trusted CA with a non-matching hostname was accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "tls proxy certificate verification failed") {
+		t.Fatalf("error = %v, want proxy certificate verification failure", msg)
+	}
+	if !strings.Contains(msg, "other.example.com") {
+		t.Fatalf("error = %v, want a hostname mismatch naming other.example.com", msg)
+	}
 }

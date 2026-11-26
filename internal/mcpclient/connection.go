@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -24,11 +25,6 @@ import (
 	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/secrets"
 )
-
-// nonOriginVerifyRoots is the trust pool for a TLS handshake whose ServerName
-// is not the origin. Nil selects the system roots inside x509.Verify. Tests
-// set it so a local proxy CA is trusted; production leaves it nil.
-var nonOriginVerifyRoots *x509.CertPool
 
 // ServerConnection holds the state of a single MCP server connection.
 type ServerConnection struct {
@@ -234,7 +230,18 @@ var headerEnvVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // NewHTTPClient constructs the HTTP client for streamable MCP connections.
 // It enforces the same-origin redirect policy and, when cfg.TLSCertFingerprint
 // is set, configures TLS leaf certificate SHA-256 pinning for https endpoints.
+// The trust pool for a non-origin TLS handshake (an HTTPS proxy) is the system
+// roots; newHTTPClientWithProxyRoots lets a caller inject one.
 func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
+	return newHTTPClientWithProxyRoots(cfg, nil)
+}
+
+// newHTTPClientWithProxyRoots is NewHTTPClient with an injectable trust pool
+// for a TLS handshake whose ServerName is not the origin — that is, an HTTPS
+// proxy. Nil selects the system roots inside x509.Verify. Production passes nil;
+// tests pass a local pool, so no package-level state is mutated and parallel
+// tests cannot race.
+func newHTTPClientWithProxyRoots(cfg config.MCPServerConfig, proxyRoots *x509.CertPool) (*http.Client, error) {
 	client := newMCPHTTPClient()
 
 	if cfg.TLSCertFingerprint == "" {
@@ -266,8 +273,14 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 		// skipping it would accept any certificate.
 		InsecureSkipVerify: true, //nolint:gosec
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if cs.ServerName != "" && !strings.EqualFold(cs.ServerName, targetHost) {
-				return verifyNonOriginCertificate(cs, nonOriginVerifyRoots)
+			// Compare canonical forms: a config host written with a trailing dot,
+			// in mixed case, or as an expanded IPv6 literal names the same origin
+			// as the SNI the handshake carries. Comparing raw strings sent such a
+			// spelling down the non-origin branch, where a leaf pin is replaced by
+			// CA trust — fail-open for an origin with a public certificate.
+			serverName := canonicalizeHost(cs.ServerName)
+			if serverName != "" && serverName != canonicalizeHost(targetHost) {
+				return verifyNonOriginCertificate(cs, proxyRoots)
 			}
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("tls pin verification failed: peer presented no certificate")
@@ -309,6 +322,34 @@ func verifyNonOriginCertificate(cs tls.ConnectionState, rootCAs *x509.CertPool) 
 		return fmt.Errorf("tls proxy certificate verification failed: %w", err)
 	}
 	return nil
+}
+
+// canonicalizeHost normalises a TLS server name or URL host so two spellings of
+// the same host compare equal: surrounding space, trailing dot(s), letter case,
+// and IPv6 textual form (including IPv4-mapped addresses).
+//
+// IDNA is deliberately not handled. golang.org/x/net is not a direct dependency
+// of this module, and adding one for a comparison would widen the dependency
+// surface of the client library. A config host written in Unicode therefore does
+// not match its punycode SNI and is treated as a non-origin handshake, which
+// fails closed for a pinned origin.
+func canonicalizeHost(host string) string {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return ""
+	}
+	// A URL host may carry brackets around an IPv6 literal; SNI never does.
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		h = h[1 : len(h)-1]
+	}
+	h = strings.TrimRight(h, ".")
+	h = strings.ToLower(h)
+	if addr, err := netip.ParseAddr(h); err == nil {
+		// Unmap folds ::ffff:127.0.0.1 onto 127.0.0.1 so both spellings compare
+		// equal; String() emits the canonical compressed form for IPv6.
+		return addr.Unmap().String()
+	}
+	return h
 }
 
 // ResolveHeaders returns a fresh HTTP header map for cfg without mutating
