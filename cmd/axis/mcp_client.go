@@ -268,15 +268,8 @@ func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, raw
 		return fmt.Errorf("tool call failed: %w", result.Err)
 	}
 
-	for _, content := range result.Result.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			fmt.Fprintln(out, tc.Text)
-		} else if ic, ok := content.(mcp.ImageContent); ok {
-			fmt.Fprintf(out, "[image: %s %d bytes]\n", ic.MIMEType, len(ic.Data))
-		} else {
-			b, _ := json.MarshalIndent(content, "", "  ")
-			fmt.Fprintln(out, string(b))
-		}
+	for _, part := range mcpclient.ContentParts(result.Result) {
+		fmt.Fprintln(out, part)
 	}
 	return nil
 }
@@ -302,15 +295,8 @@ func runMCPClientCall(ctx context.Context, out io.Writer, serverName, toolName, 
 		return fmt.Errorf("tool call failed: %w", result.Err)
 	}
 
-	for _, content := range result.Result.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			fmt.Fprintln(out, tc.Text)
-		} else if ic, ok := content.(mcp.ImageContent); ok {
-			fmt.Fprintf(out, "[image: %s %d bytes]\n", ic.MIMEType, len(ic.Data))
-		} else {
-			b, _ := json.MarshalIndent(content, "", "  ")
-			fmt.Fprintln(out, string(b))
-		}
+	for _, part := range mcpclient.ContentParts(result.Result) {
+		fmt.Fprintln(out, part)
 	}
 	return nil
 }
@@ -652,16 +638,7 @@ func runMCPClientBatch(ctx context.Context, out io.Writer, path string) error {
 			br.Error = res.Err.Error()
 		} else {
 			br.OK = true
-			var parts []string
-			for _, content := range res.Result.Content {
-				if tc, ok := content.(mcp.TextContent); ok {
-					parts = append(parts, tc.Text)
-				} else {
-					b, _ := json.Marshal(content)
-					parts = append(parts, string(b))
-				}
-			}
-			br.Output = strings.Join(parts, "\n")
+			br.Output = strings.Join(mcpclient.ContentParts(res.Result), "\n")
 		}
 		results = append(results, br)
 	}
@@ -790,13 +767,8 @@ func runMCPClientInteractive(ctx context.Context, in io.Reader, out io.Writer) e
 				fmt.Fprintf(out, "Error: %v\n", res.Err)
 				continue
 			}
-			for _, content := range res.Result.Content {
-				if tc, ok := content.(mcp.TextContent); ok {
-					fmt.Fprintln(out, tc.Text)
-				} else {
-					b, _ := json.MarshalIndent(content, "", "  ")
-					fmt.Fprintln(out, string(b))
-				}
+			for _, part := range mcpclient.ContentParts(res.Result) {
+				fmt.Fprintln(out, part)
 			}
 		case "read":
 			if len(args) < 2 {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 )
 
@@ -64,18 +63,7 @@ func (r *ToolRegistry) RegisterMCPTools(mcpRegistry *mcpclient.Registry) {
 				return "", res.Err
 			}
 
-			var parts []string
-			for _, content := range res.Result.Content {
-				if tc, ok := content.(mcp.TextContent); ok {
-					parts = append(parts, tc.Text)
-				} else if ic, ok := content.(mcp.ImageContent); ok {
-					parts = append(parts, fmt.Sprintf("[image: %s %d bytes]", ic.MIMEType, len(ic.Data)))
-				} else {
-					b, _ := json.MarshalIndent(content, "", "  ")
-					parts = append(parts, string(b))
-				}
-			}
-			return strings.Join(parts, "\n"), nil
+			return strings.Join(mcpclient.ContentParts(res.Result), "\n"), nil
 		})
 	}
 }
