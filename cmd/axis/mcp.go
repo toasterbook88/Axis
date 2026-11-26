@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	axismcp "github.com/toasterbook88/axis/internal/mcp"
 )
 
@@ -36,7 +37,7 @@ func mcpServeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().StringVar(&cacheAddr, "cache-addr", "127.0.0.1:42425", "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.Flags().StringVar(&transport, "transport", "stdio", "MCP transport: stdio")
 	return cmd
 }
