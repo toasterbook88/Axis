@@ -93,7 +93,7 @@ func probeDoctorMCPEndpoint(ctx context.Context, mcpCfg config.MCPServerConfig, 
 	if err != nil {
 		return 0, err
 	}
-	return probeDoctorHTTPEndpointTLS(ctx, mcpCfg.URL, headers, allowedHosts, tlsCfg)
+	return probeDoctorHTTPEndpoint(ctx, mcpCfg.URL, headers, allowedHosts, tlsCfg)
 }
 
 const (
@@ -101,13 +101,9 @@ const (
 	doctorHTTPProbeTimeout = 5 * time.Second
 )
 
-func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string) (int, error) {
-	return probeDoctorHTTPEndpointTLS(ctx, rawURL, headers, allowedHosts, nil)
-}
-
-// probeDoctorHTTPEndpointTLS is probeDoctorHTTPEndpoint with an optional TLS
-// client config. Nil keeps the default system-root verification.
-func probeDoctorHTTPEndpointTLS(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string, tlsCfg *tls.Config) (int, error) {
+// probeDoctorHTTPEndpoint probes rawURL through the guarded doctor transport.
+// A nil tlsCfg keeps the default system-root verification.
+func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string, tlsCfg *tls.Config) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, doctorHTTPProbeTimeout)
 	defer cancel()
 	parsed, err := url.Parse(rawURL)

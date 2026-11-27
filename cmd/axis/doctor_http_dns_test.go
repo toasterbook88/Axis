@@ -33,7 +33,7 @@ func TestDoctorHTTPDNSHonorsEndpointContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := probeDoctorHTTPEndpoint(ctx, "http://slow-dns.example/mcp", nil, nil)
+	_, err := probeDoctorHTTPEndpoint(ctx, "http://slow-dns.example/mcp", nil, nil, nil)
 	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
 		t.Fatalf("DNS ignored 20ms endpoint deadline: elapsed=%v, err=%v", elapsed, err)
 	}
@@ -61,7 +61,7 @@ func TestDoctorHTTPDNSRebindingRespectsInternalAllowlist(t *testing.T) {
 	endpoint := strings.Replace(server.URL, "127.0.0.1", "rebind.example.com", 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	status, err := probeDoctorHTTPEndpoint(ctx, endpoint, nil, nil)
+	status, err := probeDoctorHTTPEndpoint(ctx, endpoint, nil, nil, nil)
 	if reached.Load() {
 		t.Fatalf("unallowlisted loopback reached after rebinding: lookups=%d, status=%d, err=%v", lookups.Load(), status, err)
 	}
@@ -74,7 +74,7 @@ func TestDoctorHTTPRejectsMixedDNSAddresses(t *testing.T) {
 	stubDoctorDNSAnswers(t, func() []net.IP {
 		return []net.IP{net.ParseIP("192.0.2.10"), net.ParseIP("127.0.0.1")}
 	})
-	_, err := probeDoctorHTTPEndpoint(context.Background(), "http://mixed.example.com/mcp", nil, nil)
+	_, err := probeDoctorHTTPEndpoint(context.Background(), "http://mixed.example.com/mcp", nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "disallowed internal address") {
 		t.Fatalf("mixed public/internal answer must be rejected before dialing: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDoctorHTTPPreservesTLSHostnameHeadersAndSameOriginRedirect(t *testing.T
 	http.DefaultTransport = transport
 	t.Cleanup(func() { transport.CloseIdleConnections(); http.DefaultTransport = previousTransport })
 	endpoint := strings.Replace(server.URL, "127.0.0.1", hostname, 1) + "/mcp"
-	status, err := probeDoctorHTTPEndpoint(context.Background(), endpoint, map[string]string{"X-Test-Header": "yes"}, []string{hostname})
+	status, err := probeDoctorHTTPEndpoint(context.Background(), endpoint, map[string]string{"X-Test-Header": "yes"}, []string{hostname}, nil)
 	if err != nil || status != http.StatusMethodNotAllowed || requests.Load() != 2 {
 		t.Fatalf("same-origin TLS probe: status=%d err=%v requests=%d", status, err, requests.Load())
 	}
@@ -130,7 +130,7 @@ func TestDoctorHTTPRejectsCrossOriginRedirectAndBoundsLoops(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusFound)
 	}))
 	defer source.Close()
-	status, err := probeDoctorHTTPEndpoint(context.Background(), source.URL, nil, []string{"127.0.0.1"})
+	status, err := probeDoctorHTTPEndpoint(context.Background(), source.URL, nil, []string{"127.0.0.1"}, nil)
 	if status != http.StatusFound || err == nil || targetRequests.Load() != 0 {
 		t.Fatalf("cross-origin redirect followed: status=%d err=%v target requests=%d", status, err, targetRequests.Load())
 	}
@@ -140,7 +140,7 @@ func TestDoctorHTTPRejectsCrossOriginRedirectAndBoundsLoops(t *testing.T) {
 		http.Redirect(w, r, "/loop", http.StatusFound)
 	}))
 	defer loop.Close()
-	_, err = probeDoctorHTTPEndpoint(context.Background(), loop.URL, nil, []string{"127.0.0.1"})
+	_, err = probeDoctorHTTPEndpoint(context.Background(), loop.URL, nil, []string{"127.0.0.1"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") || loopRequests.Load() != maxDoctorHTTPRedirects {
 		t.Fatalf("unbounded redirect loop: err=%v requests=%d", err, loopRequests.Load())
 	}
