@@ -285,6 +285,46 @@ func TestInitCmdInvalidExistingConfigRequiresExplicitReplace(t *testing.T) {
 	}
 }
 
+// An mcp_servers entry that Load tolerates but SaveAtomic rejects must route
+// to the replace prompt; the update and Start over paths keep the entry, so
+// they would collect edits and then fail the save.
+func TestInitCmdInvalidMCPEntryRequiresExplicitReplace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	original := []byte(`nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: operator
+    role: primary
+    timeout_sec: 10
+mcp_servers:
+  bad:
+    transport: http
+    url: "https://mcp.example.com/mcp"
+    tls_cert_fingerprint: "not-hex"
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("precondition: Load must tolerate the bad entry: %v", err)
+	}
+
+	out := executeInit(t, path, "n\n", testInitDeps())
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("config was mutated without consent: %q", got)
+	}
+	if !strings.Contains(out, "Existing configuration is invalid") || !strings.Contains(out, "tls_cert_fingerprint") {
+		t.Fatalf("missing invalid-entry prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "No changes written") {
+		t.Fatalf("missing cancellation output:\n%s", out)
+	}
+}
+
 func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	for _, value := range []string{"node-a", "Node_2", "m1.local"} {
 		if err := validateNodeName(value); err != nil {

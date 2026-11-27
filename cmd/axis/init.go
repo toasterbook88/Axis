@@ -161,6 +161,12 @@ func prepareInitConfig(ctx context.Context, prompt *initPrompter, cfgPath string
 	}
 
 	existing, loadErr := deps.loadConfig(cfgPath)
+	if loadErr == nil {
+		// Load tolerates a bad mcp_servers entry so other commands keep
+		// working, but SaveAtomic rejects it. Every path below keeps the
+		// entry, so offering them would end in a refused save.
+		loadErr = existing.ValidateMCPServers()
+	}
 	if loadErr != nil {
 		fmt.Fprintf(prompt.out, "%s Existing configuration is invalid:\n  %v\n\n", ui.Red("!"), loadErr)
 		replace, err := prompt.Confirm("Replace it with a new validated configuration?", false)
