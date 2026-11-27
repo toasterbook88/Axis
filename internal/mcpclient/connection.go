@@ -244,8 +244,34 @@ func NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error) {
 func newHTTPClientWithProxyRoots(cfg config.MCPServerConfig, proxyRoots *x509.CertPool) (*http.Client, error) {
 	client := newMCPHTTPClient()
 
-	if cfg.TLSCertFingerprint == "" {
+	tlsCfg, err := pinnedTLSConfig(cfg, proxyRoots)
+	if err != nil {
+		return nil, err
+	}
+	if tlsCfg == nil {
 		return client, nil
+	}
+
+	tr := &http.Transport{}
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = defaults.Clone()
+	}
+	tr.TLSClientConfig = tlsCfg
+	client.Transport = tr
+	return client, nil
+}
+
+// PinnedTLSConfig returns the TLS client configuration that enforces
+// cfg.TLSCertFingerprint, or nil when no pin is configured. Callers that build
+// their own transport (axis doctor) use it so their handshake matches the one
+// the MCP client performs.
+func PinnedTLSConfig(cfg config.MCPServerConfig) (*tls.Config, error) {
+	return pinnedTLSConfig(cfg, nil)
+}
+
+func pinnedTLSConfig(cfg config.MCPServerConfig, proxyRoots *x509.CertPool) (*tls.Config, error) {
+	if cfg.TLSCertFingerprint == "" {
+		return nil, nil
 	}
 
 	parsed, err := url.Parse(cfg.URL)
@@ -257,12 +283,8 @@ func newHTTPClientWithProxyRoots(cfg config.MCPServerConfig, proxyRoots *x509.Ce
 		return nil, err
 	}
 
-	tr := &http.Transport{}
-	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
-		tr = defaults.Clone()
-	}
 	targetHost := parsed.Hostname()
-	tr.TLSClientConfig = &tls.Config{
+	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		// InsecureSkipVerify bypasses system CA chain validation for self-signed
 		// local certificates; authenticity is enforced strictly by
@@ -295,9 +317,7 @@ func newHTTPClientWithProxyRoots(cfg config.MCPServerConfig, proxyRoots *x509.Ce
 			}
 			return nil
 		},
-	}
-	client.Transport = tr
-	return client, nil
+	}, nil
 }
 
 // verifyNonOriginCertificate checks an HTTPS proxy handshake. The origin pin
