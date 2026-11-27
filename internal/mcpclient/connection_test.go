@@ -757,6 +757,10 @@ func dialHostTo(t *testing.T, client *http.Client, host, addr string) {
 	if !ok {
 		t.Fatalf("transport type %T, want *http.Transport", client.Transport)
 	}
+	// Dial directly: an HTTPS_PROXY in the environment would otherwise
+	// receive the CONNECT for the fake host and the test would never reach
+	// the local origin.
+	tr.Proxy = nil
 	want := strings.ToLower(strings.TrimSuffix(host, "."))
 	tr.DialContext = func(ctx context.Context, network, dialAddr string) (net.Conn, error) {
 		h, _, err := net.SplitHostPort(dialAddr)
