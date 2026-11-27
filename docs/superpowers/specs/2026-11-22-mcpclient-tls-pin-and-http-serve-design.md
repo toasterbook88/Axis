@@ -55,6 +55,13 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - `Transport` must be `"http"` (case-insensitive).
   - `Headers` must not also contain an `Authorization` header (case-insensitive) to avoid ambiguous credentials.
 
+Amendment (2026-11-27, pending spec review): these checks move out of `Config.Validate()` into
+`config.ValidateMCPServer` / `Config.ValidateMCPServers`. Run inside `Validate`, one bad entry failed
+`config.Load` for every command, the daemon included. Now `Registry.ConnectAll` runs the check per
+server and records the error on that server only (it never connects), `axis doctor` reports it as
+`fail`, and `SaveAtomic` still rejects it. Alternative kept open: leave the checks in `Validate` and
+document that a bad MCP entry is fatal for every command.
+
 ### 2. Pinned TLS and secret header resolution (`internal/mcpclient/connection.go`)
 
 - **`NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error)`:**

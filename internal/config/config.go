@@ -650,57 +650,63 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if err := validateMCPServers(c.MCPServers); err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func validateMCPServers(servers map[string]MCPServerConfig) error {
-	if len(servers) == 0 {
+// ValidateMCPServers checks every mcp_servers entry and returns the first
+// error in name order. Load does not call it: a bad entry disables only that
+// server (ConnectAll and doctor report it) instead of failing every command
+// that reads the config. SaveAtomic still rejects a bad entry.
+func (c *Config) ValidateMCPServers() error {
+	if c == nil || len(c.MCPServers) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(servers))
-	for name := range servers {
+	names := make([]string, 0, len(c.MCPServers))
+	for name := range c.MCPServers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-
 	for _, name := range names {
-		srv := servers[name]
-		isHTTP := strings.EqualFold(strings.TrimSpace(srv.Transport), "http")
+		if err := ValidateMCPServer(name, c.MCPServers[name]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		if srv.TLSCertFingerprint != "" {
-			if _, err := ParseTLSCertFingerprint(srv.TLSCertFingerprint); err != nil {
-				return fmt.Errorf("config: mcp_servers.%s: %w", name, err)
-			}
-			if !isHTTP {
-				return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires http transport", name)
-			}
-			if strings.TrimSpace(srv.URL) != "" {
-				parsed, err := url.Parse(srv.URL)
-				if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
-					return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires an https URL", name)
-				}
+// ValidateMCPServer checks one mcp_servers entry's auth and TLS fields.
+func ValidateMCPServer(name string, srv MCPServerConfig) error {
+	isHTTP := strings.EqualFold(strings.TrimSpace(srv.Transport), "http")
+
+	if srv.TLSCertFingerprint != "" {
+		if _, err := ParseTLSCertFingerprint(srv.TLSCertFingerprint); err != nil {
+			return fmt.Errorf("config: mcp_servers.%s: %w", name, err)
+		}
+		if !isHTTP {
+			return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires http transport", name)
+		}
+		if strings.TrimSpace(srv.URL) != "" {
+			parsed, err := url.Parse(srv.URL)
+			if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+				return fmt.Errorf("config: mcp_servers.%s: tls_cert_fingerprint requires an https URL", name)
 			}
 		}
+	}
 
-		if srv.BearerTokenEnv != "" && !envVarNameRe.MatchString(srv.BearerTokenEnv) {
-			return fmt.Errorf("config: mcp_servers.%s: invalid bearer_token_env %q", name, srv.BearerTokenEnv)
-		}
-		if srv.BearerTokenFile != "" && strings.TrimSpace(srv.BearerTokenFile) == "" {
-			return fmt.Errorf("config: mcp_servers.%s: bearer_token_file cannot be whitespace-only", name)
-		}
+	if srv.BearerTokenEnv != "" && !envVarNameRe.MatchString(srv.BearerTokenEnv) {
+		return fmt.Errorf("config: mcp_servers.%s: invalid bearer_token_env %q", name, srv.BearerTokenEnv)
+	}
+	if srv.BearerTokenFile != "" && strings.TrimSpace(srv.BearerTokenFile) == "" {
+		return fmt.Errorf("config: mcp_servers.%s: bearer_token_file cannot be whitespace-only", name)
+	}
 
-		if srv.BearerTokenEnv != "" || srv.BearerTokenFile != "" {
-			if !isHTTP {
-				return fmt.Errorf("config: mcp_servers.%s: bearer_token_env/bearer_token_file requires http transport", name)
-			}
-			for hk := range srv.Headers {
-				if strings.EqualFold(strings.TrimSpace(hk), "authorization") {
-					return fmt.Errorf("config: mcp_servers.%s: cannot set both bearer_token_env/bearer_token_file and Authorization header", name)
-				}
+	if srv.BearerTokenEnv != "" || srv.BearerTokenFile != "" {
+		if !isHTTP {
+			return fmt.Errorf("config: mcp_servers.%s: bearer_token_env/bearer_token_file requires http transport", name)
+		}
+		for hk := range srv.Headers {
+			if strings.EqualFold(strings.TrimSpace(hk), "authorization") {
+				return fmt.Errorf("config: mcp_servers.%s: cannot set both bearer_token_env/bearer_token_file and Authorization header", name)
 			}
 		}
 	}

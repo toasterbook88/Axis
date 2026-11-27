@@ -399,6 +399,15 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		sort.Strings(mcpNames)
 		for _, name := range mcpNames {
 			mcpCfg := cfg.MCPServers[name]
+			if err := config.ValidateMCPServer(name, mcpCfg); err != nil {
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("MCP Server %q Config", name),
+					Status:  "fail",
+					Message: err.Error(),
+					Fix:     "fix the mcp_servers entry in nodes.yaml; the MCP client will not connect to it",
+				})
+				continue
+			}
 			switch strings.ToLower(mcpCfg.Transport) {
 			case "stdio":
 				if len(mcpCfg.Command) == 0 {
