@@ -65,7 +65,19 @@ func defaultGenerateDependencies() generateDependencies {
 var tailscaleStatusJSONFn = tailscaleStatusJSON
 
 func tailscaleStatusJSON(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	// The wizard's scan passes a context with no deadline; bound it here too.
+	ctx, cancel := context.WithTimeout(ctx, generateStatusTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tailscale", "status", "--json")
+	// Killing tailscale does not close a stdout pipe that a child (a wrapper
+	// script's app binary, say) inherited; without WaitDelay, Output blocks
+	// until that child exits, past any deadline.
+	cmd.WaitDelay = 250 * time.Millisecond
+	out, err := cmd.Output()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("tailscale status did not answer within %s: %w", generateStatusTimeout, ctxErr)
+	}
+	return out, err
 }
 
 // tailscaleStatus holds the fields of `tailscale status --json` this report

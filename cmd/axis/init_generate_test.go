@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -815,5 +816,45 @@ func TestDiscoverTailscalePeersUsesTheSharedStatus(t *testing.T) {
 	peers, err := discoverTailscalePeers(context.Background())
 	if err != nil || len(peers) != 1 || peers[0].Name != "alpha" || peers[0].Hostname != "100.64.0.10" {
 		t.Fatalf("discoverTailscalePeers = %+v, %v; want only the online peer at its first tailnet IP", peers, err)
+	}
+}
+
+// A tailscale that leaves a child holding stdout must not keep the status read
+// blocked: once the process exits or the deadline passes, the pipe wait is bounded.
+func TestTailscaleStatusJSONDoesNotHangOnInheritedPipe(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("shell unavailable")
+	}
+	bin := t.TempDir()
+	stub := "#!/bin/sh\nsleep 10 &\n" + `case "$AXIS_TEST_TS_MODE" in exit) printf '{}' ;; *) sleep 10 ;; esac` + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "tailscale"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name, mode string
+		deadline   time.Duration
+	}{
+		{"killed at deadline", "hang", 200 * time.Millisecond},
+		{"exited with child holding stdout", "exit", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AXIS_TEST_TS_MODE", tc.mode)
+			ctx := context.Background()
+			if tc.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.deadline)
+				defer cancel()
+			}
+			start := time.Now()
+			_, err := tailscaleStatusJSON(ctx)
+			if elapsed := time.Since(start); elapsed > 3*time.Second {
+				t.Fatalf("tailscaleStatusJSON blocked %s on an inherited stdout pipe", elapsed)
+			}
+			if err == nil {
+				t.Fatal("tailscaleStatusJSON returned no error for an unfinished status read")
+			}
+		})
 	}
 }
