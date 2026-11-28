@@ -123,13 +123,17 @@ Options for the maintainer:
   `configureRegistry(r, registryConfig{Scope, EagerTools, DisableDeferral, ResultCap, MCP})`,
   and call it from `New` and `buildChildAgent`. The child's config comes from the parent's
   registry at spawn time.
-- `buildChildAgent` sets `child.autonomy` to the parent's mode. The child holds no confirm
-  of its own: it prompts through the root's current `a.confirm`, which `SetAutonomy`
-  rewraps on every mode change (`agent.go:206`, `:326`), so a mode change reaches running
-  children's prompts too.
-- The child's registry shares the root's checkpointer and todo store, which today each
-  registry makes for itself (`tools.go:76`). An edit child's write is then the session's
-  most recent mutation for the root's `undo_last` and `review_changes` (`tools_p1.go:81-86`).
+- `buildChildAgent` sets `child.autonomy` to the parent's mode. A sync child holds no
+  confirm of its own: it prompts through the root's current `a.confirm`, which
+  `SetAutonomy` rewraps on every mode change (`agent.go:206`, `:326`), so a mode change
+  reaches running children's prompts too. An async child's confirm is below.
+- The child's registry shares the root's checkpointer, which today each registry makes
+  for itself (`tools.go:76`). Every executor reads `r.checkpoints` at call time
+  (`tools.go:1047`, `:1127`, `:1203`; `tools_p1.go:84`, `:130-139`), so setting the field in
+  `configureRegistry` is enough. An edit child's write is then the session's most recent
+  mutation for the root's `undo_last` and `review_changes`. The todo store stays per
+  agent: `todo init` replaces the whole list (`tools_todo.go:123`, `:140-146`), so a shared
+  store would let a child erase its parent's plan.
 - **Approval state is shared, not copied.** Today the child gets a copy of
   `sessionApproved` and `blockAll` (`confirm.go:137-148`, `subagent.go:206`, `:239-240`), and
   an answer given to a child's prompt is written on the child alone
@@ -144,26 +148,37 @@ Options for the maintainer:
   parent's scope. At each dispatch, a child also refuses a tool the root's registry would
   not show at the root's current scope, with the existing "not available in this mode"
   error (`dispatch.go:124-126`). Lowering `/autonomy` on the root narrows running children
-  on their next call; raising it does not widen a child past its spawn scope. The child
+  on their next call. A child's effective scope is the lower of its spawn scope and the
+  root's current scope, so raising the mode again restores a lowered child up to its spawn
+  scope and never past it. The child
   reads the root's scope under the root's `dispatchMu`, the lock `SetAutonomy` writes it
-  under (`agent.go:310-319`). At the start of each round a child whose scope is above the
-  root's lowers its registry to the root's scope and refreshes its visible-tools message
-  (`agent.go:345`), so it stops advertising what it can no longer call. The refusal text
+  under (`agent.go:310-319`). At the start of each round a child sets its registry to that effective
+  scope and refreshes its visible-tools message (`agent.go:345`), so it advertises only
+  what it can call. The refusal text
   for a call caught between rounds says the operator lowered the session to that scope.
 - **Async children never prompt.** A sync child runs inside the parent's turn, so its
   prompts reach the operator the way the parent's do. An async child may still be running
   after the turn ends, when the plain REPL is reading stdin (`cmd/axis/agent_repl.go:134-157`)
-  and a prompt would race it. So a call from an async child that needs a prompt is
-  refused, as `pipedConfirm` refuses one (`cmd/axis/agent_oneshot.go:92`), with
-  an error telling the child to say in its answer what it needs approved. Session
-  approvals and auto-approved tools still run. A sync child can do approved edits; an
-  async child does only what needs no prompt.
+  and a prompt would race it. So an async child's confirm is
+  `autonomyConfirm(<root's current mode>, refuse)` (`autonomy.go:70-104`): the mode's own
+  auto-approvals and session approvals still run, and any call that would reach the
+  surface confirm is refused, the way `pipedConfirm` sits under the autonomy wrapper
+  (`cmd/axis/agent_oneshot.go:85-92`). The refusal tells the child to say in its answer
+  what it needs approved. Under default autonomy an async child cannot write; under edit
+  or full it writes and runs low-risk commands unattended, within what the operator
+  granted with that mode.
 - `consult_model` stays hidden in the child (no resolver, `tools.go:181-186`); a child
   seat is the seat-placement direction.
 - At `maxSubAgentDepth` the child's registry withholds `spawn_subagent`: a small
   `withheld map[string]bool` on `ToolRegistry`, checked first in `callableNonBridge`
   (`tools.go:177`). Below the cap the child sees it and may spawn one level down. This
   matches the cap the code already enforces (`subagent.go:91`) and makes the prompt agree.
+- **At most 6 sub-agents run at once per session**, counted on the root across all
+  depths, sync and async. A spawn at the cap is refused with "sub-agent limit reached (6
+  running); finish or check a running one before spawning again; do not retry this
+  spawn now". 6 is `maxParallelTools` (`agent.go:19`), the most calls one round runs at
+  once, so one round can still fan out fully. Claude Code caps running subagents at 20
+  with the same no-retry error (Research).
 
 ### D3. The child's prompt is built from its visible tools
 
@@ -189,9 +204,12 @@ free capacity optimizes nothing for a read. So, in `dispatchSubagent`, before bu
 child, the target comes from the first rule that applies:
 
 1. **Set by parent.** `strings.TrimSpace(sa.TargetNode)` is not empty and names a node in
-   `view.Config.Nodes`: use it. Reason `set by parent`. A name not in `nodes.yaml` refuses
-   the spawn with the error `runRemote` gives, which lists the available nodes
-   (`tools_cluster.go:35-39`).
+   `view.Config.Nodes`: use it. Reason `set by parent`. A name not in a loaded
+   `nodes.yaml` refuses the spawn with the error `runRemote` gives, which lists the
+   available nodes (`tools_cluster.go:35-39`). With no cluster config loaded (`view.Config`
+   nil, as when the runtime failed to load, `agent.go:173-176`), the name is used as given
+   with reason `set by parent, cluster config not loaded`; the child's remote tools then
+   report the missing config themselves.
 2. **No node-scoped tools.** The child's registry shows none of `remote_read_file`,
    `remote_grep` or `remote_list` (only possible under D5 option B or C): no target.
    Reason `none (no node-scoped tools at <scope>)`.
@@ -379,7 +397,9 @@ External prior art:
   interactive session a subagent that launches background subagents waits for their
   results before it finishes; under `claude -p` and the Agent SDK a background nested
   subagent reports to the main conversation instead. D6 takes the interactive behavior,
-  since axis has no main-conversation channel a grandchild could report to.
+  since axis has no main-conversation channel a grandchild could report to. The same
+  page caps running subagents at 20 per session: a further spawn fails with "Concurrent
+  subagent limit reached" and tells the model not to retry. D2's cap copies the shape.
 - A2A `TaskState` ([`specification/a2a.proto`](https://raw.githubusercontent.com/a2aproject/A2A/main/specification/a2a.proto))
   and MCP tasks ([2025-11-25 tasks](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/specification/2025-11-25/basic/utilities/tasks.mdx))
   both have a cancelled terminal state, spelled `canceled` in A2A and `cancelled` in MCP;
@@ -396,6 +416,12 @@ delta there is only the catalog lines. Shortening the descriptions instead was n
 measured; it would still send all six schemas on every round.
 Placement adds at most one view reload and one `ExplainPlacement` call per spawn, and only
 for briefs that match a workload profile.
+
+Optimization: model requests. Without a cap, one round of 6 parallel sync spawns, each
+spawning 6 more, runs 42 sub-agents of up to 6 turns each (252 model requests) with no
+prompt at observe, since `spawn_subagent` dispatches before the confirm step
+(`dispatch.go:167-169`). D2's cap of 6 running sub-agents bounds that at 6 sub-agents and 36
+child requests at the default `max_turns`.
 
 ## Validation
 
@@ -439,17 +465,24 @@ for briefs that match a workload profile.
 - Cancelling the turn ctx while a sync child waits on a running grandchild returns at
   once, with the grandchild `cancelled` in the folded result. The folded text is pinned:
   `nested sync/bg-1: ...` with no `check_task` hint.
-- An edit child writes a file, then the root's `undo_last` restores that write.
-- An async edit child's `write_file` is refused without a prompt; a sync edit child's
-  prompts the operator once. A plain-REPL test confirms no prompt is read while the REPL
-  waits for input.
+- An edit child writes a file, then the root's `undo_last` restores that write. A
+  child's `todo init` leaves the root's list unchanged.
+- Under default autonomy a sync child's `write_file` prompts the operator once and an
+  async child's is refused with no prompt; under edit autonomy both run with no prompt.
+  A plain-REPL test confirms no prompt is read while the REPL waits for input.
+- With 6 sub-agents running across depths, a seventh spawn is refused with the no-retry
+  text; after one finishes, a spawn succeeds.
 - After the root drops from edit to observe, a running child's next round shows no edit
   tools in its `Defs()` and system message. A table over mode transitions (full to edit,
-  edit to default, default to edit) checks the child prompts through the root's current
-  confirm.
+  edit to default, default to edit, edit to cluster to edit) checks the child's effective
+  scope and that a sync child prompts through the root's current confirm.
+- D4 table: a target name with no cluster config loaded keeps the name with reason
+  `set by parent, cluster config not loaded`.
 - A child that hits its ceiling returns the turn-ceiling error, sync and async, with the
   receipt line first; answered and failed paths keep their current text after the receipt.
-- Existing subagent tests (`internal/agent/subagent_test.go`) stay green; run the hermetic
+- Existing subagent tests (`internal/agent/subagent_test.go`) stay green: they set
+  `target_node` with `NewToolContext(&RuntimeView{}, nil)` (`:51`, `:77`, `:100`), the
+  no-config path of rule 1; run the hermetic
   agent tests, `go vet`, `hack/verify-specs.go` and the full preflight.
 
 ## Review sequencing
