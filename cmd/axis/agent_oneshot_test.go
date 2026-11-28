@@ -104,7 +104,7 @@ func TestPipedObserverQuietStillPrintsCeiling(t *testing.T) {
 
 func TestPipedConfirmDeniesWithNotice(t *testing.T) {
 	var buf bytes.Buffer
-	confirm := pipedConfirm(&buf)
+	confirm := pipedConfirm(&buf, nil)
 	if confirm("run_shell", "rm -rf /", 90) != agent.ConfirmNo {
 		t.Fatal("piped confirm must deny")
 	}
@@ -124,8 +124,8 @@ func TestPipedConfirmDeniesWithNotice(t *testing.T) {
 // --autonomy full; other scores keep the flag hint.
 func TestPipedConfirmNamesSpecificSafetyRule(t *testing.T) {
 	var ask, other bytes.Buffer
-	pipedConfirm(&ask)("run_shell", "git push", safety.ScoreAskAlways)
-	pipedConfirm(&other)("run_shell", "make", 0)
+	pipedConfirm(&ask, nil)("run_shell", "git push", safety.ScoreAskAlways)
+	pipedConfirm(&other, nil)("run_shell", "make", 0)
 	if !strings.Contains(ask.String(), "safety rule") || strings.Contains(ask.String(), "--autonomy full") {
 		t.Fatalf("score 75 notice should name the safety rule and not the flag:\n%s", ask.String())
 	}
@@ -145,7 +145,7 @@ func TestAgentSafetyLabelFullNamesSpecificRisks(t *testing.T) {
 
 func TestPipedConfirmConsultStillAsks(t *testing.T) {
 	var buf bytes.Buffer
-	if pipedConfirm(&buf)("consult_model", "ask seat-a", 0) != agent.ConfirmNo {
+	if pipedConfirm(&buf, nil)("consult_model", "ask seat-a", 0) != agent.ConfirmNo {
 		t.Fatal("piped consult must deny")
 	}
 	got := buf.String()
@@ -172,15 +172,15 @@ type errWriterForTest struct{}
 func (errWriterForTest) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestConfirmForPipedMode(t *testing.T) {
-	if confirmForPipedMode(false, nil) != nil {
+	if confirmForPipedMode(false, nil, nil) != nil {
 		t.Fatal("non-piped mode must keep the agent's default StdinConfirm")
 	}
-	c := confirmForPipedMode(true, errWriterForTest{})
+	c := confirmForPipedMode(true, errWriterForTest{}, nil)
 	if c == nil {
 		t.Fatal("piped mode must produce the fail-closed confirm")
 	}
 	var buf bytes.Buffer
-	if pipedConfirm(&buf)("t", "d", 50) != agent.ConfirmNo {
+	if pipedConfirm(&buf, nil)("t", "d", 50) != agent.ConfirmNo {
 		t.Fatal("pipedConfirm must deny")
 	}
 }

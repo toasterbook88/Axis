@@ -84,6 +84,12 @@ type Observer interface {
 // make the transcript useless as an audit trail, which is the reason the
 // operator is being shown the command at all.
 func redactForSurface(s string) string {
+	return RedactForSurface(s)
+}
+
+// RedactForSurface applies the agent's structured-output masking to text
+// rendered by a caller, such as a machine-readable approval description.
+func RedactForSurface(s string) string {
 	if s == "" {
 		return ""
 	}

@@ -55,12 +55,18 @@ type Agent struct {
 	observer    Observer
 	sessionLog  *DailySessionLog
 	runMu       sync.Mutex
-	maxTurns    int
-	maxTokens   int
-	verbose     bool
-	dryRun      bool
-	toolContext *ToolContext
-	model       string
+	// outcomeMu guards lastOutcome, which records how the most recent run
+	// ended (run_outcome.go). It is separate from runMu so a caller can read
+	// the outcome without waiting on a run in progress.
+	outcomeMu    sync.Mutex
+	lastOutcome  RunOutcome
+	scopeRefused []string
+	maxTurns     int
+	maxTokens    int
+	verbose      bool
+	dryRun       bool
+	toolContext  *ToolContext
+	model        string
 	// sessionSummary is the cluster summary taken when the agent was built.
 	// It is sent with each user message, not in the system prompt.
 	sessionSummary string
@@ -395,6 +401,14 @@ func (a *Agent) dropLatestPrompt(prompt string) {
 }
 
 func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
+	stop, rounds := RunStopTurnCeiling, 0
+	defer func() {
+		if err != nil {
+			stop = RunStopFailed
+		}
+		a.setRunOutcome(RunOutcome{Stop: stop, Turns: rounds, MaxTurns: a.maxTurns})
+	}()
+	a.resetScopeRefused()
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
 	startIn, startOut, startUsageTurns := a.UsageStats()
 	if a.sessionLog != nil {
@@ -431,12 +445,14 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
 		}
 
+		rounds = turn + 1
 		a.sessionLog.noteResponse(resp)
 		a.accumulateUsage(resp.UsageTokensIn, resp.UsageTokensOut)
 		a.conv.Append(resp)
 
 		// If no tool calls, the model produced a final text answer — done.
 		if len(resp.ToolCalls) == 0 {
+			stop = RunStopAnswered
 			return nil
 		}
 
@@ -514,6 +530,10 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		}
 	}
 
+	// The loop used every turn without a final answer. Run still returns
+	// nil, as it always has, so interactive surfaces keep the conversation
+	// going; LastRunOutcome reports RunStopTurnCeiling for callers that
+	// must tell this apart from an answer.
 	a.emitMaxTurnsReached(a.maxTurns)
 	return nil
 }
