@@ -628,3 +628,19 @@ Questions:
 
 - Does a lowered child climb back when the root's mode is raised? Became D2: its effective scope is the lower of its spawn scope and the root's current scope, with an edit to cluster to edit case.
 - Does `LastRunOutcome` carry a turn count for the receipt? Verified: the `-p` exit-code change's output document carries `turns` and `max_turns` from it (`2026-11-28-exit-code-fix.patch`, outside the repo).
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: 63b1cd8
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Major: a child's badges and streamed text go to the parent's writer, which is stdout in `-p`, and never reach the observer or session log. Fixed in addeaff: D2 sets the child's writer to `io.Discard`, sends its events to the root's session log and, for a sync child, to the current turn's observer tagged with depth and task id, with Validation cases for `-p` stdout and async output.
+
+Questions:
+
+- Does Close wait for task goroutines before the exit line? Became D6: Close waits up to the console's 3-second shutdown wait, with a Validation case.
+- Should rule 3 match a negated mention in `objective` or `prompt`? Became D4: it does; avoiding a node goes in `boundary` or `target_node`, and the receipt shows the choice.
+- Should the cap refusal say "finish" when no tool cancels a sub-agent? Became D2: it says wait for a running one to end, and cancelling stays out of scope.
