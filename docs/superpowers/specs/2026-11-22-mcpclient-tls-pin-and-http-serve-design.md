@@ -2,6 +2,33 @@
 
 Date: 2026-11-22. Status: implemented on `feat/mcpclient-tls-pin-and-http-serve`; spec review and both independent diff reviews `approve-with-changes`, all findings resolved below.
 
+## Follow-up scope (2026-11-28, PR #686)
+
+The original design and its recorded reviews remain historical. This follow-up restores
+doctor interoperability and release-preparation checks, and amends config-load behavior:
+
+- Doctor resolves the same `${VAR}` headers and bearer references as the MCP client and
+  uses the same leaf pin through `mcpclient.PinnedTLSConfig`. Its guarded transport keeps
+  proxy use disabled, dial-time address policy and same-origin redirect checks. Its probe
+  seam now accepts `MCPServerConfig`. Acceptance: pinned self-signed auth succeeds, wrong
+  pins and unset credentials fail, and existing DNS/redirect/address-policy tests pass.
+- The per-server validation amendment in section 1 makes ordinary config reads tolerant
+  while rejecting invalid entries before connection. `SaveAtomic` stays strict. The init
+  wizard checks these entries before offering edit/reset paths and requires explicit
+  replacement consent. Acceptance: invalid entries never connect, general loads succeed,
+  invalid saves fail and declining replacement leaves the original file unchanged.
+- The release-claims guard counts an untagged `buildinfo.Version` as a pending release
+  when tags exist, catching two-release README drift in the prep PR. A tag-less checkout
+  still skips, and explicit test fixtures remain deterministic. Acceptance: the regression
+  suite rejects the v0.27.1 README against v0.28.0 plus pending v0.29.0, accepts one-release
+  lag and preserves the no-tags skip. This is an independent release-gate bug fix, not a
+  new MCP feature; documenting it here accounts for the complete follow-up diff.
+- The pinned-host test dials its fake endpoint directly regardless of `HTTPS_PROXY`.
+  Production proxy behavior is unchanged.
+
+These bug fixes add no command, config key or wire field. The config-load amendment
+changes documented behavior and requires its own spec and diff review before integration.
+
 ## Problem
 
 Three gaps block `axis` from interoperating securely over Streamable HTTP with local MCP servers (such as native self-signed local MCP endpoints) without leaking credentials into `~/.axis/nodes.yaml`:
@@ -15,7 +42,8 @@ Three gaps block `axis` from interoperating securely over Streamable HTTP with l
 - No UDP multicast discovery, Bonjour/mDNS browsing, device pairing flows, or new top-level `axis app` CLI command. Those require a separate wire-protocol spec and public-boundary review.
 - No mounting `/mcp` onto `axis serve` (`:42425`); `axis mcp serve --transport http` runs as its own explicit command on a separate default loopback port (`127.0.0.1:42426`).
 - No TLS termination flags (`--tls-cert`/`--tls-key`) on `axis mcp serve --transport http`; operators placing a TLS reverse proxy in front of loopback must rewrite the forwarded `Host` header to `localhost` or `127.0.0.1` because `mcp-go`'s default loopback DNS-rebinding check remains enabled.
-- No changes to `axis doctor`'s `doctorProbeHTTP` signature or probe behavior in this change (separate follow-up if needed).
+- The original change did not alter `axis doctor`; PR #686's reviewed follow-up scope above
+  supersedes this exclusion for the authentication/TLS probe only.
 - No change to `axis agent`'s external MCP approval contract: `internal/agent/tools_mcp.go` already enforces exact `auto_approve_tools` matching and ignores server-supplied tool annotations; this change only adds a regression test pinning that behavior for read-only vs write tools.
 - No writes to `~/.axis/nodes.yaml` or `~/.axis/ai.yaml`.
 
