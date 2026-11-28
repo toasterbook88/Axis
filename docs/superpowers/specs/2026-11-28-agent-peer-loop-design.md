@@ -724,3 +724,24 @@ Verdict: revise
 Questions:
 
 - Is the binding charter cited by the earlier gate comment in force? Open: `artifacts/governance/axis-agent-charter.yaml` is on no ref of this repository; asked the maintainer where it lives.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: ddad28358523680889782f155e9d7f13bfd40fad
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Major: routing child events to the root's session log let a child's `beginTurn`, `finishTurn` and `markMaxTurns` bump the root's turn number and mark an answered root turn `stop=max_turns` (probe: a spawn run wrote `started turn=2` and `finished turn=2 stop=max_turns answer="root answer"`). Fixed in 9d1007c: a `childSessionLog` wrapper makes turn methods no-ops and writes tool and approval records with the root's turn number and new `depth` and `task` fields, the session-log runbook joins the docs list, and Validation checks one started and one finished record per root turn.
+
+2. Major: the grandchild fold reported `cancelled` and returned at once with no bound for a backend that ignores its context. Fixed in 9d1007c: the fold waits up to 3 seconds after the context ends, folds an unreturned task as `stopping, may still be running, results dropped`, drops its late result, and Validation runs the context-ignoring stub as the grandchild.
+
+3. Minor: the verbose spawn line goes to Output, which is stdout under `-p` (probe output showed the line in the Output buffer with an observer set). Fixed in 9d1007c: D8 sends it through the observer when one is set, and Validation checks stdout under `-p --verbose`.
+
+Questions:
+
+- Can a child's call id collide with a root call id in the console and the session log? Became D2: the observer and log wrappers prefix child ids with `<task-id>/`, with a Validation case.
+- Is an async child's `autonomyConfirm` mode read at spawn or per call? Became D2: per call.
+- Does an async child keep the `--auto-approve` layer? Became D2: no, by design, because that flag answers prompts the operator would see.
+- External claims (Claude Code limits, A2A and MCP spellings) were not re-read by this reviewer, which had no network. Verified: the author read those pages before the first review; see Research links.
