@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 )
@@ -53,5 +54,37 @@ func TestDoctorMCPProbeUsesClientAuthAndPin(t *testing.T) {
 	if _, err := probeDoctorMCPEndpoint(context.Background(), unset, []string{"127.0.0.1"}); err == nil ||
 		!strings.Contains(err.Error(), "resolve headers") {
 		t.Fatalf("unset token: err=%v, want resolve headers error", err)
+	}
+}
+
+func TestDoctorMCPProbeDoesNotDrainSSE(t *testing.T) {
+	for _, contentType := range []string{"text/event-stream", "text/event-stream; charset=utf-8"} {
+		t.Run(contentType, func(t *testing.T) {
+			t.Setenv("DOCTOR_SSE_TOKEN", "synthetic-probe-token")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer synthetic-probe-token" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			started := time.Now()
+			status, err := probeDoctorMCPEndpoint(ctx, config.MCPServerConfig{
+				Transport: "http", URL: server.URL, BearerTokenEnv: "DOCTOR_SSE_TOKEN",
+			}, []string{"127.0.0.1"})
+			if err != nil || status != http.StatusOK {
+				t.Fatalf("SSE probe: status=%d err=%v", status, err)
+			}
+			if ctx.Err() != nil {
+				t.Fatal("probe waited for the deadline while draining an open SSE body")
+			}
+			t.Logf("SSE headers accepted in %v", time.Since(started))
+		})
 	}
 }

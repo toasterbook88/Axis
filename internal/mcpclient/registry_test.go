@@ -219,3 +219,17 @@ func TestConnectAllIsolatesInvalidServerConfig(t *testing.T) {
 		t.Fatalf("bad entry: conn=%+v, want a per-server tls_cert_fingerprint error", conn)
 	}
 }
+
+func TestConnectAllRejectsInvalidStdioBeforeStarting(t *testing.T) {
+	r := NewRegistry()
+	r.ConnectAll(context.Background(), &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"bad-stdio": {
+			Transport: "stdio", Command: []string{"/nonexistent-example-command"},
+			BearerTokenEnv: "EXAMPLE_TOKEN",
+		},
+	}})
+	conn := r.Get("bad-stdio")
+	if conn == nil || conn.Err == nil || !strings.Contains(conn.Err.Error(), "requires http transport") {
+		t.Fatal("invalid stdio entry must fail config validation before process startup")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -165,7 +166,12 @@ func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[str
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	// A successful Streamable HTTP GET may stay open indefinitely. The
+	// response headers already prove routing/authentication; do not drain SSE.
+	if mediaType != "text/event-stream" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	}
 
 	// Streamable HTTP MCP endpoints commonly return 405/406/400 on a bare GET,
 	// which still proves DNS, TLS, and listener routing succeeded.

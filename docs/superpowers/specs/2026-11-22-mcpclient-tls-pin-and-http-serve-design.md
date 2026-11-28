@@ -1,6 +1,6 @@
 # `mcpclient` TLS certificate pinning, secret header resolution, and Streamable HTTP `axis mcp serve`
 
-Date: 2026-11-22. Status: implemented on `feat/mcpclient-tls-pin-and-http-serve`; spec review and both independent diff reviews `approve-with-changes`, all findings resolved below.
+Date: 2026-11-22. Status: original feature implemented on `feat/mcpclient-tls-pin-and-http-serve`; follow-up review results and resolutions are recorded below.
 
 ## Follow-up scope (2026-11-28, PR #686)
 
@@ -72,7 +72,9 @@ Add `ParseTLSCertFingerprint(raw string) ([32]byte, error)` in `internal/config`
 - Accepts either 64 contiguous hex characters or colon-separated hex pairs/groups with no leading, trailing, or consecutive colons (`::`).
 - Decodes to `[32]byte` via `encoding/hex`; rejects any other length or non-hex character.
 
-Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-name order:
+`config.ValidateMCPServer` checks one entry. `Config.ValidateMCPServers()` checks
+`c.MCPServers` in deterministic sorted-name order. Ordinary Parse/Load calls the core
+`Config.Validate()` and tolerates invalid MCP entries so unrelated commands keep working:
 - If `TLSCertFingerprint != ""`:
   - `ParseTLSCertFingerprint` must succeed.
   - `Transport` must be `"http"` (case-insensitive).
@@ -83,14 +85,27 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - `Transport` must be `"http"` (case-insensitive).
   - `Headers` must not also contain an `Authorization` header (case-insensitive) to avoid ambiguous credentials.
 
-Amendment (2026-11-27, pending spec review): these checks move out of `Config.Validate()` into
+Amendment (2026-11-27; reviewed with changes on 2026-11-28): these checks move out of `Config.Validate()` into
 `config.ValidateMCPServer` / `Config.ValidateMCPServers`. Run inside `Validate`, one bad entry failed
 `config.Load` for every command, the daemon included. Now `Registry.ConnectAll` runs the check per
 server and records the error on that server only (it never connects), `axis doctor` reports it as
-`fail`, and `SaveAtomic` still rejects it. Alternative kept open: leave the checks in `Validate` and
-document that a bad MCP entry is fatal for every command.
+`fail`, and `SaveAtomic` still rejects it. The init wizard invokes `ValidateMCPServers`
+before offering edit/reset paths and routes an invalid entry to the explicit replacement
+prompt. Accepting replacement intentionally creates a fresh configuration without the
+old optional sections, preserving the existing replacement contract and backup; declining
+leaves the original bytes unchanged. Preserving valid optional sections during replacement
+would be a separate behavior change. The rejected alternatives are recorded below.
 
 ### 2. Pinned TLS and secret header resolution (`internal/mcpclient/connection.go`)
+
+- **`PinnedTLSConfig(cfg) (*tls.Config, error)`:** exposes the same pin configuration
+  used by `NewHTTPClient` for doctor, returning nil without a configured pin. Doctor
+  validates the entry first, then uses `ResolveHeaders` and this pin inside its existing
+  guarded, proxy-less transport. Resolution or pin/probe errors are warnings; invalid
+  configuration is a failed check before probing. An SSE response is closed after its
+  headers are checked, without draining the open stream. Finite bodies keep the existing
+  bounded drain. This avoids spending the five-second probe budget on each authenticated
+  Streamable HTTP server.
 
 - **`NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error)`:**
   - Keeps the existing same-origin redirect policy (`maxMCPRedirects = 10`, same scheme and host).
@@ -135,7 +150,15 @@ document that a bad MCP entry is fatal for every command.
 
 - `internal/config/mcp_config_test.go`:
   - `ParseTLSCertFingerprint`: valid bare hex, uppercase/colon-separated, `sha256:` prefix; rejects wrong length, non-hex, leading/trailing/double colons, empty.
-  - `Config.Validate`: rejects invalid fingerprint, fingerprint on `http://` or `stdio`, invalid `bearer_token_env` name, `bearer_token_env`/`bearer_token_file` on `stdio`, and conflicting `Authorization` header with `bearer_token_env`.
+  - Parse/Load tolerates invalid MCP entries; `ValidateMCPServers` rejects invalid fingerprint, fingerprint on `http://` or `stdio`, invalid `bearer_token_env` name, `bearer_token_env`/`bearer_token_file` on `stdio`, and conflicting `Authorization` header with `bearer_token_env`. `SaveAtomic` rejects them before writing.
+- `internal/mcpclient/registry_test.go`: a stdio entry with HTTP-only auth fields and
+  a nonexistent command fails with the configuration error, proving process startup
+  is never attempted; an HTTP-only guard cannot satisfy this test accidentally.
+- Doctor and init follow-up tests: invalid MCP config produces a failed named check,
+  command failure and no HTTP probe; pinned authentication succeeds while wrong pins and
+  missing tokens fail; an authenticated, flushed SSE response returns before the context
+  deadline even while its body stays open. The init replacement prompt requires explicit
+  consent and declining preserves the original file.
 - `internal/mcpclient/connection_test.go`:
   - Self-signed `httptest.NewTLSServer` fails without pin, succeeds with matching `tls_cert_fingerprint` (including colon-separated / `sha256:` formats), and fails with wrong pin.
   - Rejects `tls_cert_fingerprint` on `http://` URL.
@@ -152,6 +175,14 @@ document that a bad MCP entry is fatal for every command.
   - Regression test verifying read-only tools in `auto_approve_tools` auto-approve while unlisted `propose_library_item` requires confirmation even when the server sets `ReadOnlyHint: true`.
 
 ## Alternatives
+
+- **Keep MCP auth/TLS validation in `Config.Validate`.** Rejected: one optional invalid
+  server would still prevent every ordinary command and daemon refresh from loading the
+  core config. Shared per-entry validation preserves fail-closed connection and save paths.
+- **Store per-entry errors or drop entries during Load.** Not selected: adding another
+  configuration error representation or silently removing repairable entries expands the
+  change. Keep entries intact, centralize their validator, and require every connection
+  or probe consumer to call it. Regression tests pin those consumer boundaries.
 
 - **Custom CA bundle (`tls_ca_file`) instead of leaf fingerprint pinning.** Useful for private PKIs, but local app servers typically generate a single self-signed leaf certificate without exporting a separate CA chain; leaf SHA-256 pinning requires one string in YAML and zero extra files. A future `tls_ca_file` field remains additive.
 - **Boolean `tls_insecure_skip_verify: true`.** Rejected: disables authenticity checks completely and exposes bearer tokens to active MITM.
