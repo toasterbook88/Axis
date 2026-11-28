@@ -673,3 +673,21 @@ Questions:
 - Does Close wait for task goroutines before the exit line? Became D6: Close waits up to the console's 3-second shutdown wait, with a Validation case.
 - Should rule 3 match a negated mention in `objective` or `prompt`? Became D4: it does; avoiding a node goes in `boundary` or `target_node`, and the receipt shows the choice.
 - Should the cap refusal say "finish" when no tool cancels a sub-agent? Became D2: it says wait for a running one to end, and cancelling stays out of scope.
+
+Kind: spec
+Reviewer: Codex, posted by the maintainer on PR #688 (comment 7237330305)
+Model: OpenAI
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: 4299da1729a68b85ab980de042f971bc4445279e
+Date: 2026-11-28
+Verdict: revise
+
+1. Major: Validation had a default-autonomy child's `write_file` prompt, but default maps to observe, where `write_file` is hidden and refused before confirm. Fixed in f21194f: Validation requires the observe refusal with no prompt and tests prompting with a stub external MCP tool that is visible at observe and not auto-approved.
+
+2. Major: D6 let Close return after 3 seconds and report tasks cancelled, while Validation required no task still running; a backend or tool that ignores cancellation can outlive the wait. Fixed in f21194f: `CloseReport` separates `Cancelled` (goroutine returned) from `Stopping` (cancel requested, not confirmed), a `closed` flag drops late state changes and session-log events, children stop at the next model request or tool call, an in-flight tool may still finish its side effect, and Validation adds a stub that blocks past the wait.
+
+3. Major: Research said the 6-sub-agent cap bounds total child requests at 36; concurrency does not bound cumulative spawns (one child spawning 6 grandchildren in sequence makes 42). Fixed in f21194f: Research states the cap as a concurrency limit, and Non-goals lists a cumulative budget.
+
+Questions:
+
+- Is the binding charter cited by the earlier gate comment in force? Open: `artifacts/governance/axis-agent-charter.yaml` is on no ref of this repository; asked the maintainer where it lives.
