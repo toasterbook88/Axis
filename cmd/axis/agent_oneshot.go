@@ -146,7 +146,9 @@ func (p *pipedApprovals) list() []pendingApproval {
 // report needs_input.
 func pipedConfirm(w io.Writer, rec *pipedApprovals) agent.ConfirmFunc {
 	return func(tool, desc string, score int) agent.ConfirmResult {
-		item := pendingApproval{Tool: tool, Request: clipLine(desc, 400), RiskScore: score}
+		// Redact before clipping: truncation can otherwise preserve part of a
+		// credential while removing the shape the redactor recognizes.
+		item := pendingApproval{Tool: tool, Request: clipLine(agent.RedactForSurface(desc), 400), RiskScore: score}
 		switch {
 		case strings.HasPrefix(tool, "mcp_"):
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session (external MCP tools ask in every autonomy mode; list it under mcp_servers.<server>.auto_approve_tools in nodes.yaml, or run interactively)\n", tool)

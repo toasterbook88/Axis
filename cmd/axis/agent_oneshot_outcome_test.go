@@ -270,6 +270,40 @@ func TestPipedRunNeedsInputJSON(t *testing.T) {
 	}
 }
 
+// Approval descriptions carry raw tool arguments. The result must redact them
+// just as the tool observer does, including before the request is clipped.
+func TestPipedRunApprovalJSONRedactsCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name, argument, secret string
+	}{
+		{"bearer", "Authorization: Bearer synthetic-bearer-value", "synthetic-bearer-value"},
+		{"api key", "X-API-Key: synthetic-api-key-value", "synthetic-api-key-value"},
+		{"assignment", "token=synthetic-assignment-value", "synthetic-assignment-value"},
+		{"clipped bearer", strings.Repeat("x", 240) + " Authorization: Bearer " + strings.Repeat("s", 100), strings.Repeat("s", 12)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]string{"command": "git push origin main --push-option='" + tc.argument + "'"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			be := &scriptedBackend{steps: []chat.Message{
+				toolCall("c1", "run_shell", string(args)), answer("push needs approval"),
+			}}
+			r := runPipedMode(t, be, 2, false, "json", agent.AutonomyFull)
+			if ExitCode(r.err) != ExitErrAgentNeedsInput {
+				t.Fatalf("exit = %v, want needs_input", r.err)
+			}
+			if strings.Contains(r.stdout, tc.secret) || strings.Contains(r.stderr, tc.secret) {
+				t.Fatal("credential leaked through approval result or diagnostics")
+			}
+			pending := decodeAgentDoc(t, r.stdout).Data.PendingApprovals
+			if len(pending) != 1 || !strings.Contains(pending[0].Request, "[REDACTED]") {
+				t.Fatalf("want one redacted pending approval, got %d", len(pending))
+			}
+		})
+	}
+}
+
 func TestPipedRunFailedJSON(t *testing.T) {
 	be := &scriptedBackend{err: errors.New("backend down")}
 	r := runPiped(t, be, 3, false, "json")
