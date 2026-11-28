@@ -369,3 +369,33 @@ changes substantially and needs a new spec review before code (AGENTS.md §8, st
 
 ## Review
 
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: e6efa8d
+Date: 2026-11-28
+Verdict: revise
+
+1. Major: D4 ranked every empty-target spawn by free capacity, so a brief that names a node could be sent elsewhere, and a brief that matches no workload profile was still ranked. Fixed in f5a7aed: D4 resolves set by parent, then no node-scoped tools, then one node named in the brief, then the ranker only when `InferRequirements` matched a profile, else no target.
+
+2. Major: D2 copied approval state into the child, so "never" answered in a child blocked only the child and parent and child prompts could overlap (`dispatch.go:255-271`). Fixed in f5a7aed: children read and write the root's `sessionApproved`, `blockAll`, `dispatchMu` and confirm gate, and each child dispatch is capped by the root's current scope.
+
+3. Major: D6 put `defer a.Close()` at the console `buildAgent` site, which returns at startup and would cancel children at once. Fixed in f5a7aed: Close runs after `prog.Run()` in `runAgentConsoleStartup` and in a deferred closure after `agent.New` in `cmd/axis/agent.go`, with a console test that spawns after startup.
+
+4. Major: making six tools eager at observe breaks scope, deferral, approval and budget tests. Fixed in f5a7aed: D1 loads them deferred by default through a `deferredBuiltin` set in `eager`, and Validation lists every pin to update.
+
+5. Minor: Research said no optimization applies though eager loading grows every request. Fixed in f5a7aed: Research states the measured 6565-byte observe baseline and the 3752-byte delta, removed by deferred loading.
+
+6. Minor: the receipt reason restated a fixed phrase instead of the decision, and the "no node-scoped tools" branch was unreachable under D5 option A. Fixed in f5a7aed: the reason is built from class, decisive criterion and metric value, and rule 2 is marked as applying under D5 option B or C.
+
+7. Minor: placement used the cached view while cluster tools reload under `dispatchMu`. Fixed in f5a7aed: D4 rule 4 reloads the view under `dispatchMu` first.
+
+8. Minor: a cancel during the child's last turn returns nil at the ceiling and would be reported as turn_ceiling. Fixed in f5a7aed: a task whose context is done when `Run` returns finishes as cancelled whatever `err` and the outcome say.
+
+Questions:
+
+- Can the ranker pick a snapshot node that `nodes.yaml` does not list, so the child's remote tools cannot reach it? Verified: `runRemote` resolves only `view.Config.Nodes` (`tools_cluster.go:35-39`); f5a7aed restricts ranking to those nodes.
+- Should the error paths carry the receipt? Became D7: every error row starts with the receipt line, pinned in Validation.
+- Is `errors.Is(err, context.Canceled)` enough to classify a cancel? Verified: no, the ceiling path returns nil (`agent.go:462-518`); finding 8's fix replaces that check.
