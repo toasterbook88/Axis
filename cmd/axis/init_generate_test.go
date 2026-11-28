@@ -857,4 +857,18 @@ func TestTailscaleStatusJSONDoesNotHangOnInheritedPipe(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("caller cancel is not reported as a timeout", func(t *testing.T) {
+		t.Setenv("AXIS_TEST_TS_MODE", "hang")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(200*time.Millisecond, cancel)
+		_, err := tailscaleStatusJSON(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+		if strings.Contains(err.Error(), "did not answer within") {
+			t.Fatalf("a caller cancel must not read as a timeout: %v", err)
+		}
+	})
 }

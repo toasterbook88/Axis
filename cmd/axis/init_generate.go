@@ -75,7 +75,11 @@ func tailscaleStatusJSON(ctx context.Context) ([]byte, error) {
 	cmd.WaitDelay = 250 * time.Millisecond
 	out, err := cmd.Output()
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, fmt.Errorf("tailscale status did not answer within %s: %w", generateStatusTimeout, ctxErr)
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("tailscale status did not answer within %s: %w", generateStatusTimeout, ctxErr)
+		}
+		// The caller cancelled (Ctrl-C, say); that is not a timeout.
+		return nil, ctxErr
 	}
 	return out, err
 }
