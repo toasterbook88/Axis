@@ -57,7 +57,7 @@ type pipedRun struct {
 }
 
 // runPiped drives runOneShotPiped the way `axis agent -p` does: piped
-// confirm with a recorder, and io.Discard as the stream for --format json.
+// confirm with a recorder, and stderr as the stream for --format json.
 func runPiped(t *testing.T, be agent.ChatBackend, maxTurns int, dryRun bool, format string) pipedRun {
 	return runPipedMode(t, be, maxTurns, dryRun, format, agent.AutonomyDefault)
 }
@@ -68,7 +68,7 @@ func runPipedMode(t *testing.T, be agent.ChatBackend, maxTurns int, dryRun bool,
 	rec := &pipedApprovals{}
 	agentOut := io.Writer(&stdout)
 	if format == "json" {
-		agentOut = io.Discard
+		agentOut = &stderr
 	}
 	a := agent.New(agent.Config{
 		Backend: be, MaxTurns: maxTurns, MaxTokens: 100000, DryRun: dryRun,
@@ -135,7 +135,7 @@ func TestPipedExitCodesAreDistinct(t *testing.T) {
 	for name, code := range map[string]int{
 		"ok": ExitOK, "generic": ExitErrGeneric, "config": ExitErrConfigLoad, "nofit": ExitErrNoNodesFit,
 		"cmdfail": ExitErrCommandFail, "context": ExitErrContextWrite, "io": ExitErrIO,
-		"unlisted": ExitErrModelUnlisted, "ceiling": ExitAgentTurnCeiling, "needs": ExitAgentNeedsInput,
+		"unlisted": ExitErrModelUnlisted, "ceiling": ExitErrAgentTurnCeiling, "needs": ExitErrAgentNeedsInput,
 	} {
 		if prev, dup := seen[code]; dup {
 			t.Fatalf("exit code %d used by %s and %s", code, prev, name)
@@ -151,14 +151,20 @@ func TestPipedConfirmRecordsDenials(t *testing.T) {
 	c("run_shell", "make deploy", 40)
 	c("run_shell", "git push", 75)
 	c("consult_model", "ask seat-a", 0)
+	c("run_shell", "rm -rf /", 100)
+	c("mcp_files_delete", "delete x", 0)
 	got := rec.list()
-	if len(got) != 3 {
-		t.Fatalf("recorded %d denials, want 3: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("recorded %d denials, want 5: %+v", len(got), got)
 	}
 	want := []pendingApproval{
 		{Tool: "run_shell", Request: "make deploy", RiskScore: 40, Clears: "--autonomy full"},
 		{Tool: "run_shell", Request: "git push", RiskScore: 75, Clears: "interactive approval"},
 		{Tool: "consult_model", Request: "ask seat-a", RiskScore: 0, Clears: "interactive approval"},
+		// Full autonomy still asks for a safety-blocked override and for
+		// every unlisted MCP tool, so the hint must not name that flag.
+		{Tool: "run_shell", Request: "rm -rf /", RiskScore: 100, Clears: "interactive approval"},
+		{Tool: "mcp_files_delete", Request: "delete x", RiskScore: 0, Clears: "auto_approve_tools"},
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -181,8 +187,8 @@ func TestPipedRunAnsweredExitsZero(t *testing.T) {
 func TestPipedRunTurnCeilingExitsEight(t *testing.T) {
 	be := &scriptedBackend{steps: []chat.Message{toolCall("c1", "cluster_status", `{}`)}}
 	r := runPiped(t, be, 2, true, "text")
-	if got := ExitCode(r.err); got != ExitAgentTurnCeiling {
-		t.Fatalf("exit code = %d (%v), want %d", got, r.err, ExitAgentTurnCeiling)
+	if got := ExitCode(r.err); got != ExitErrAgentTurnCeiling {
+		t.Fatalf("exit code = %d (%v), want %d", got, r.err, ExitErrAgentTurnCeiling)
 	}
 	if !strings.Contains(r.stderr, "stopped at the 2-turn ceiling") {
 		t.Fatalf("ceiling notice missing from stderr:\n%s", r.stderr)
@@ -195,8 +201,8 @@ func TestPipedRunTurnCeilingExitsEight(t *testing.T) {
 func TestPipedRunTurnCeilingJSON(t *testing.T) {
 	be := &scriptedBackend{steps: []chat.Message{toolCall("c1", "cluster_status", `{}`)}}
 	r := runPiped(t, be, 2, true, "json")
-	if got := ExitCode(r.err); got != ExitAgentTurnCeiling {
-		t.Fatalf("exit code = %d, want %d", got, ExitAgentTurnCeiling)
+	if got := ExitCode(r.err); got != ExitErrAgentTurnCeiling {
+		t.Fatalf("exit code = %d, want %d", got, ExitErrAgentTurnCeiling)
 	}
 	doc := decodeAgentDoc(t, r.stdout)
 	if doc.OK || doc.Status != "turn_ceiling" {
@@ -236,8 +242,8 @@ func TestPipedRunNeedsInputJSON(t *testing.T) {
 	// --autonomy full still asks for a specific safety rule (git push), and
 	// a piped run cannot answer that ask.
 	r := runPipedMode(t, be, 5, false, "json", agent.AutonomyFull)
-	if got := ExitCode(r.err); got != ExitAgentNeedsInput {
-		t.Fatalf("exit code = %d (%v), want %d\nstderr:\n%s", got, r.err, ExitAgentNeedsInput, r.stderr)
+	if got := ExitCode(r.err); got != ExitErrAgentNeedsInput {
+		t.Fatalf("exit code = %d (%v), want %d\nstderr:\n%s", got, r.err, ExitErrAgentNeedsInput, r.stderr)
 	}
 	doc := decodeAgentDoc(t, r.stdout)
 	d := doc.Data
@@ -284,5 +290,64 @@ func TestAgentCmdFormatValidation(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%v: err = %v, want %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// A tool the default observe mode hides fails for the model, which may then
+// answer around it; the caller still learns a wider mode would do more.
+func TestPipedRunScopeHiddenToolIsNeedsInput(t *testing.T) {
+	be := &scriptedBackend{steps: []chat.Message{
+		toolCall("c1", "run_shell", `{"command":"git push origin main"}`),
+		answer("I cannot run commands in this mode"),
+	}}
+	r := runPipedMode(t, be, 5, false, "json", agent.AutonomyDefault)
+	if got := ExitCode(r.err); got != ExitErrAgentNeedsInput {
+		t.Fatalf("exit code = %d (%v), want %d\nstderr:\n%s", got, r.err, ExitErrAgentNeedsInput, r.stderr)
+	}
+	d := decodeAgentDoc(t, r.stdout).Data
+	if len(d.PendingApprovals) != 1 {
+		t.Fatalf("pending = %+v", d.PendingApprovals)
+	}
+	if p := d.PendingApprovals[0]; p.Tool != "run_shell" || p.Clears != "--autonomy full" || !strings.Contains(p.Request, "--autonomy mode") {
+		t.Fatalf("pending approval = %+v", p)
+	}
+}
+
+// slowLastRound returns a tool call every round and sleeps on the last one,
+// so the request deadline expires while that round's tools would run.
+type slowLastRound struct {
+	mu    sync.Mutex
+	calls int
+	last  int
+	sleep time.Duration
+}
+
+func (s *slowLastRound) ChatStream(context.Context, []chat.Message, []chat.ToolDef, io.Writer) (chat.Message, error) {
+	s.mu.Lock()
+	s.calls++
+	n := s.calls
+	s.mu.Unlock()
+	if n == s.last {
+		time.Sleep(s.sleep)
+	}
+	return toolCall("c1", "cluster_status", `{}`), nil
+}
+
+func TestPipedRunDeadlineOnLastRoundIsFailed(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	a := agent.New(agent.Config{
+		Backend: &slowLastRound{last: 2, sleep: 150 * time.Millisecond}, MaxTurns: 2, MaxTokens: 100000, DryRun: true,
+		ToolContext: &agent.ToolContext{}, Output: &stderr,
+		Observer: observerForPipedMode(true, &stderr, false),
+		Confirm:  confirmForPipedMode(true, &stderr, &pipedApprovals{}),
+	})
+	err := runOneShotPiped(context.Background(), a, "check", pipedRunOptions{
+		Out: &stdout, ErrW: &stderr, Timeout: 50 * time.Millisecond, Format: "json", Approvals: &pipedApprovals{},
+	})
+	if got := ExitCode(err); got != ExitErrCommandFail {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, ExitErrCommandFail)
+	}
+	if d := decodeAgentDoc(t, stdout.String()).Data; d.Outcome != "failed" || !strings.Contains(d.Error, "deadline") {
+		t.Fatalf("data = %+v", d)
 	}
 }

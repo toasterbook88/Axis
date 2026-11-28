@@ -120,11 +120,16 @@ func (p *pipedApprovals) list() []pendingApproval {
 
 // pipedConfirm is the fail-closed confirm for -p runs: a piped invocation
 // cannot answer an interactive prompt, so everything reaching the confirm
-// layer is denied with a notice pointing at the flags that suppress the
-// question (--auto-approve or --autonomy full). Those wrappers sit ABOVE
-// this base in the agent's confirm chain, so safe commands under
-// --auto-approve never reach it. A specific safety rule's ask (score 75 to
-// 79) reaches it even under --autonomy full, so its notice says so instead.
+// layer is denied. The --auto-approve and --autonomy wrappers sit ABOVE this
+// base in the agent's confirm chain, so what reaches it is what those flags
+// did not clear. Each notice, and each recorded denial's clears, names what
+// would let a rerun through:
+//   - external MCP tools ask in every autonomy mode unless nodes.yaml lists
+//     them under mcp_servers.<server>.auto_approve_tools;
+//   - consult_model and any command scoring ScoreAskAlways or more (a
+//     specific safety rule's ask, or a safety-blocked override) ask even
+//     under --autonomy full, so only an interactive run clears them;
+//   - anything else clears with --autonomy full.
 //
 // Each denial is also recorded in rec (nil records nothing) so the run can
 // report needs_input.
@@ -132,20 +137,33 @@ func pipedConfirm(w io.Writer, rec *pipedApprovals) agent.ConfirmFunc {
 	return func(tool, desc string, score int) agent.ConfirmResult {
 		item := pendingApproval{Tool: tool, Request: clipLine(desc, 400), RiskScore: score}
 		switch {
-		case score >= safety.ScoreAskAlways && score < 80:
-			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and a specific safety rule flagged it (run interactively to approve)\n", tool)
-			item.Clears = "interactive approval"
+		case strings.HasPrefix(tool, "mcp_"):
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session (external MCP tools ask in every autonomy mode; list it under mcp_servers.<server>.auto_approve_tools in nodes.yaml, or run interactively)\n", tool)
+			item.Clears = pipedClearsMCPAllowlist
 		case tool == "consult_model":
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session (consult_model still asks under --autonomy full and --auto-approve; run interactively)\n", tool)
-			item.Clears = "interactive approval"
+			item.Clears = pipedClearsInteractive
+		case score >= 80:
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and safety blocked it (only an interactive override can run it)\n", tool)
+			item.Clears = pipedClearsInteractive
+		case score >= safety.ScoreAskAlways:
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and a specific safety rule flagged it (run interactively to approve)\n", tool)
+			item.Clears = pipedClearsInteractive
 		default:
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
-			item.Clears = "--autonomy full"
+			item.Clears = pipedClearsAutonomyFull
 		}
 		rec.add(item)
 		return agent.ConfirmNo
 	}
 }
+
+// Values of pendingApproval.Clears.
+const (
+	pipedClearsAutonomyFull = "--autonomy full"
+	pipedClearsInteractive  = "interactive approval"
+	pipedClearsMCPAllowlist = "auto_approve_tools"
+)
 
 // observerForPipedMode returns the stderr badge observer for -p runs and nil
 // otherwise (nil keeps the agent's long-standing stdout fallback formatting
@@ -191,9 +209,9 @@ func classifyPipedRun(runErr error, stop agent.RunStop, pending int) (string, in
 	case runErr != nil || stop == agent.RunStopFailed:
 		return pipedOutcomeFailed, ExitErrCommandFail
 	case pending > 0:
-		return pipedOutcomeNeedsInput, ExitAgentNeedsInput
+		return pipedOutcomeNeedsInput, ExitErrAgentNeedsInput
 	case stop == agent.RunStopTurnCeiling:
-		return pipedOutcomeTurnCeiling, ExitAgentTurnCeiling
+		return pipedOutcomeTurnCeiling, ExitErrAgentTurnCeiling
 	default:
 		return pipedOutcomeAnswered, ExitOK
 	}
@@ -246,7 +264,7 @@ type pipedRunOptions struct {
 // usual), tool badges and the session summary on stderr, no session banner.
 // The confirm layer is fail-closed (pipedConfirm) so a piped run never
 // blocks on an interactive prompt. With --format json the caller has sent
-// the stream to io.Discard, and stdout carries one axis.output/v1 document.
+// the stream to stderr, and stdout carries one axis.output/v1 document.
 //
 // Exit codes: 0 answered, 8 turn ceiling, 9 needs input, 4 failed.
 func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, opts pipedRunOptions) error {
@@ -255,10 +273,22 @@ func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, op
 	defer cancel()
 	start := time.Now()
 	runErr := a.Run(ctx2, instruction)
+	ro := a.LastRunOutcome()
+	if runErr == nil && ro.Stop == agent.RunStopTurnCeiling && ctx2.Err() != nil {
+		// The deadline or a signal cut the last round's tools short; that
+		// is a failed run, not one that used its turns.
+		runErr = ctx2.Err()
+	}
 	if runErr != nil {
 		fmt.Fprintf(errW, "error: Agent failed: %v\n", runErr)
 	}
-	ro := a.LastRunOutcome()
+	// A call the autonomy mode hid never reached the confirm, but a rerun
+	// with --autonomy full would let it run, so it counts the same way.
+	for _, tool := range ro.ScopeRefused {
+		opts.Approvals.add(pendingApproval{
+			Tool: tool, Request: "hidden by the current --autonomy mode", Clears: pipedClearsAutonomyFull,
+		})
+	}
 	pending := opts.Approvals.list()
 	outcome, code := classifyPipedRun(runErr, ro.Stop, len(pending))
 
@@ -311,4 +341,20 @@ func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, op
 		return ExitCodeError{Code: code, Message: fmt.Sprintf("agent stopped at the %d-turn ceiling without a final answer", ro.MaxTurns)}
 	}
 	return nil
+}
+
+// writePipedStartupFailure writes the --format json document for a -p run
+// that failed before the agent ran (config, model or backend startup), so a
+// caller parsing stdout still gets one document. exit_code is the code the
+// process exits with.
+func writePipedStartupFailure(out io.Writer, err error, maxTurns int) {
+	code := ExitCode(err)
+	res := pipedRunResult{
+		Outcome:          pipedOutcomeFailed,
+		ExitCode:         code,
+		MaxTurns:         maxTurns,
+		PendingApprovals: []pendingApproval{},
+		Error:            err.Error(),
+	}
+	_ = writeMachineOutput(out, "agent", pipedOutcomeFailed, false, res, nil)
 }

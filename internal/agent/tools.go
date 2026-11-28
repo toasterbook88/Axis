@@ -330,6 +330,18 @@ func (r *ToolRegistry) visible(name string) bool {
 	return r.callableNonBridge(name)
 }
 
+// visibleUnderFull reports whether --autonomy full (ScopeExec) would let
+// the model call name.
+func (r *ToolRegistry) visibleUnderFull(name string) bool {
+	if r == nil || name == "" || neverTool(name) || name == "axis_summary" || isBridgeTool(name) {
+		return false
+	}
+	if _, ok := r.executors[name]; !ok {
+		return false
+	}
+	return execTool(name) || r.extraVisible(name) || toolVisible(name, ScopeExec)
+}
+
 // Visible reports whether the model may call name in the current scope.
 func (r *ToolRegistry) Visible(name string) bool {
 	if r == nil {

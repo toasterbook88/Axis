@@ -58,14 +58,15 @@ type Agent struct {
 	// outcomeMu guards lastOutcome, which records how the most recent run
 	// ended (run_outcome.go). It is separate from runMu so a caller can read
 	// the outcome without waiting on a run in progress.
-	outcomeMu   sync.Mutex
-	lastOutcome RunOutcome
-	maxTurns    int
-	maxTokens   int
-	verbose     bool
-	dryRun      bool
-	toolContext *ToolContext
-	model       string
+	outcomeMu    sync.Mutex
+	lastOutcome  RunOutcome
+	scopeRefused []string
+	maxTurns     int
+	maxTokens    int
+	verbose      bool
+	dryRun       bool
+	toolContext  *ToolContext
+	model        string
 	// sessionSummary is the cluster summary taken when the agent was built.
 	// It is sent with each user message, not in the system prompt.
 	sessionSummary string
@@ -407,6 +408,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		}
 		a.setRunOutcome(RunOutcome{Stop: stop, Turns: rounds, MaxTurns: a.maxTurns})
 	}()
+	a.resetScopeRefused()
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
 	startIn, startOut, startUsageTurns := a.UsageStats()
 	if a.sessionLog != nil {

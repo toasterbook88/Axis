@@ -122,6 +122,7 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, a.ToolNames())
 	}
 	if !a.tools.Visible(name) {
+		a.noteScopeRefused(name)
 		return "", fmt.Errorf("tool %q is not available in this mode", name)
 	}
 
@@ -319,6 +320,7 @@ func (a *Agent) dispatchDeferredToolCall(ctx context.Context, tc chat.ToolCall, 
 		return "", fmt.Errorf("unknown tool %q — available tools: %s", target, a.ToolNames())
 	}
 	if !a.tools.Visible(target) {
+		a.noteScopeRefused(target)
 		return "", fmt.Errorf("tool %q is not available in this mode", target)
 	}
 	if !a.tools.IsDeferred(target) {

@@ -79,7 +79,7 @@ func agentCmd() *cobra.Command {
 			"Agent output is advisory only — it is a consumer of the fact plane,\n" +
 			"never a source of cluster truth.",
 		Args: cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
@@ -90,6 +90,21 @@ func agentCmd() *cobra.Command {
 			}
 			if format == "json" && !printMode {
 				return ExitCodeError{Code: ExitErrGeneric, Message: "--format json requires -p/--print"}
+			}
+			jsonMode := printMode && format == "json"
+			// From here on a -p --format json run writes one document on
+			// stdout whatever happens. runOneShotPiped writes it once the agent
+			// runs; a failure before that writes a failed document here.
+			pipedRan := false
+			if jsonMode {
+				defer func() {
+					if retErr != nil && !pipedRan {
+						writePipedStartupFailure(cmd.OutOrStdout(), retErr, maxTurns)
+					}
+				}()
+			}
+			if printMode && maxTurns < 1 {
+				return ExitCodeError{Code: ExitErrGeneric, Message: "--max-turns must be at least 1 with -p/--print"}
 			}
 			// A desk lease is a private job. Decide it before any cluster lookup.
 			if deskLeasePath != "" {
@@ -194,6 +209,12 @@ func agentCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			errW := cmd.ErrOrStderr()
+			// --format json keeps stdout for the result document: the model
+			// picker and the assistant stream go to stderr instead.
+			streamW := w
+			if jsonMode {
+				streamW = errW
+			}
 
 			fmt.Fprintln(errW, ui.Dim("advisory: agent output is not cluster truth — it uses tools to read the fact plane"))
 
@@ -226,7 +247,7 @@ func agentCmd() *cobra.Command {
 				RT:                    rt,
 				Ctx:                   ctx,
 				In:                    os.Stdin,
-				Out:                   w,
+				Out:                   streamW,
 				ErrOut:                errW,
 			})
 			if err != nil {
@@ -245,14 +266,8 @@ func agentCmd() *cobra.Command {
 				fmt.Fprintf(errW, "warning: %s\n", msg)
 			})
 			// -p records the approvals it had to deny so the run can report
-			// needs_input. --format json keeps stdout for the result
-			// document, so the assistant stream goes nowhere; final_text
-			// carries the answer.
+			// needs_input.
 			pipedPending := &pipedApprovals{}
-			agentOut := w
-			if printMode && format == "json" {
-				agentOut = io.Discard
-			}
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
@@ -274,7 +289,7 @@ func agentCmd() *cobra.Command {
 				Cluster:                 cluster,
 				Knowledge:               k,
 				ToolContext:             tc,
-				Output:                  agentOut,
+				Output:                  streamW,
 				MCPRegistry:             mcpReg,
 				RuntimeLoader:           loader,
 				SessionLog:              sessionLog,
@@ -305,6 +320,7 @@ func agentCmd() *cobra.Command {
 				// One-shot runs append to the daily session log. They do not
 				// replace agent-history.json, which is the interactive resume file.
 				if printMode {
+					pipedRan = true
 					return runOneShotPiped(ctx, a, instruction, pipedRunOptions{
 						Out: w, ErrW: errW, Timeout: timeout, Format: format, Approvals: pipedPending,
 					})
@@ -364,7 +380,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&useConsole, "console", false, "Force the transcript console (deprecated: the console is now the default on an interactive terminal; use --plain for the legacy REPL). Approvals: y yes, n no; Enter does not approve")
 	cmd.Flags().BoolVar(&plain, "plain", false, "Run the legacy line-at-a-time REPL instead of the transcript console (takes precedence over --console)")
 	cmd.Flags().BoolVarP(&printMode, "print", "p", false, "One-shot piped execution: assistant text on stdout, tool badges and summary on stderr, no banner. Exit codes: 0 answered, 8 stopped at --max-turns, 9 needs an approval -p cannot give, 4 failed")
-	cmd.Flags().StringVar(&format, "format", "text", "Output format for -p: text, or json (one axis.output/v1 document on stdout with outcome, turns, final_text, pending_approvals and exit_code)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format for -p: text, or json (one axis.output/v1 document on stdout with outcome, turns, final_text, pending_approvals and exit_code; the streamed text goes to stderr)")
 	cmd.Flags().StringVar(&deskLeasePath, "desk-lease", "", "Private job: read a seat lease file and send one completion only when that lease is usable")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd

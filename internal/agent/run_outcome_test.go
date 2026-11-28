@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/chat"
@@ -39,7 +40,7 @@ func TestLastRunOutcomeAnswered(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	got := a.LastRunOutcome()
-	if got != (RunOutcome{Stop: RunStopAnswered, Turns: 1, MaxTurns: 3}) {
+	if want := (RunOutcome{Stop: RunStopAnswered, Turns: 1, MaxTurns: 3}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcome = %+v", got)
 	}
 }
@@ -53,7 +54,7 @@ func TestLastRunOutcomeTurnCeiling(t *testing.T) {
 		t.Fatalf("Run at the ceiling must still return nil, got %v", err)
 	}
 	got := a.LastRunOutcome()
-	if got != (RunOutcome{Stop: RunStopTurnCeiling, Turns: 2, MaxTurns: 2}) {
+	if want := (RunOutcome{Stop: RunStopTurnCeiling, Turns: 2, MaxTurns: 2}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcome = %+v", got)
 	}
 	if n := be.callCount(); n != 2 {
@@ -85,5 +86,34 @@ func TestLastRunOutcomeResetsPerRun(t *testing.T) {
 	_ = a.Run(context.Background(), "second")
 	if got := a.LastRunOutcome().Stop; got != RunStopAnswered {
 		t.Fatalf("second run = %q, want answered", got)
+	}
+}
+
+// A call the mode hides is recorded when --autonomy full would expose the
+// tool, once per run, and never for a tool no mode exposes.
+func TestLastRunOutcomeScopeRefused(t *testing.T) {
+	calls := func(names ...string) *chat.Message {
+		m := &chat.Message{Role: chat.RoleAssistant}
+		for i, n := range names {
+			m.ToolCalls = append(m.ToolCalls, chat.ToolCall{ID: string(rune('a' + i)), Function: chat.ToolCallFunction{
+				Name: n, Arguments: json.RawMessage(`{"command":"git push origin main"}`),
+			}})
+		}
+		return m
+	}
+	be := &hookBackend{response: calls("run_shell", "run_shell", "spawn_subagent")}
+	a := New(Config{Backend: be, MaxTurns: 1, MaxTokens: 100000, Output: io.Discard, ToolContext: &ToolContext{}})
+	if err := a.Run(context.Background(), "push it"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := a.LastRunOutcome().ScopeRefused; !reflect.DeepEqual(got, []string{"run_shell"}) {
+		t.Fatalf("ScopeRefused = %v, want [run_shell]", got)
+	}
+	be.response = &chat.Message{Role: chat.RoleAssistant, Content: "done"}
+	if err := a.Run(context.Background(), "again"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := a.LastRunOutcome().ScopeRefused; got != nil {
+		t.Fatalf("ScopeRefused carried into the next run: %v", got)
 	}
 }

@@ -34,8 +34,9 @@ snapshot-bound metadata fields and matches `publication.id` from `/snapshot`.
 ## `axis agent -p --format json`
 
 A piped agent run writes one `axis.output/v1` document to stdout when it
-finishes, in place of the streamed assistant text. Tool badges, denial notices
-and the token summary stay on stderr. `command` is `agent`, `status` is the
+finishes, including when it fails before the agent starts. The streamed
+assistant text, the model picker, tool badges, denial notices and the token
+summary go to stderr. `command` is `agent`, `status` is the
 run's outcome, and `ok` is true only for `answered`.
 
 ```json
@@ -62,8 +63,9 @@ run's outcome, and `ok` is true only for `answered`.
 |---|---|---|
 | `answered` | 0 | the model ended a round with no tool calls |
 | `turn_ceiling` | 8 | the loop used every `--max-turns` round without a final answer |
-| `needs_input` | 9 | at least one step needed an approval a piped run cannot give |
-| `failed` | 4 | the run returned an error; `data.error` says which |
+| `needs_input` | 9 | at least one step needed an approval a piped run cannot give, or a tool the `--autonomy` mode hides |
+| `failed` | 4 | the run returned an error, or the deadline or a signal cut its last round short; `data.error` says which |
+| `failed` | 1 or 2 | the agent never started (bad flags, unknown role, config or backend startup); `turns` is 0 |
 
 - An error wins over the other outcomes, and `needs_input` wins over
   `turn_ceiling` and `answered`: the model may have answered around the denied
@@ -72,9 +74,16 @@ run's outcome, and `ok` is true only for `answered`.
   what the model said beside its last tool calls, often empty. It is empty on
   `failed`.
 - `pending_approvals` is always an array. Each entry has `tool`, `request`
-  (the approval text, up to 400 characters), `risk_score` and `clears`: either
-  `--autonomy full`, or `interactive approval` for consult_model and a specific
-  safety rule's ask, which no flag clears.
+  (the approval text, up to 400 characters), `risk_score` and `clears`, what
+  lets a rerun through: `--autonomy full`; `auto_approve_tools` for an
+  external MCP tool, which asks in every mode unless `nodes.yaml` lists it
+  under `mcp_servers.<server>.auto_approve_tools`; or `interactive approval`
+  for consult_model and any command scoring 75 or more (a safety rule's ask or
+  a safety-blocked override), which no flag clears.
+- A call to a tool the `--autonomy` mode hides (for example `run_shell` in the
+  default observe mode) also lands in `pending_approvals`, with `request`
+  `hidden by the current --autonomy mode` and `clears` `--autonomy full`.
+- `--max-turns` must be at least 1 with `-p`.
 - `usage.estimated` is true when the backend reported no usage; `tokens_in` is
   then the conversation estimate.
 

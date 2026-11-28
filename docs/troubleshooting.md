@@ -603,6 +603,8 @@ axis task place --cached "workload"
 | 5 | `ExitErrContextWrite` | Context write failure | Check disk space |
 | 6 | `ExitErrIO` | I/O failure | Check filesystem |
 | 7 | `ExitErrModelUnlisted` | Model not listed on backends | Add model or fix backend |
+| 8 | `ExitErrAgentTurnCeiling` | `axis agent -p` used every `--max-turns` round without a final answer | Raise `--max-turns` or narrow the prompt |
+| 9 | `ExitErrAgentNeedsInput` | `axis agent -p` denied a step it could not ask about | Read `pending_approvals[].clears` in `--format json`; rerun with that, or interactively |
 
 ---
 
