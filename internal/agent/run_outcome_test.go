@@ -34,6 +34,32 @@ func TestLastRunOutcomeZeroBeforeRun(t *testing.T) {
 	}
 }
 
+func TestLastRunOutcomeReturnsIndependentSnapshot(t *testing.T) {
+	a := &Agent{scopeRefused: []string{"run_shell"}}
+	a.setRunOutcome(RunOutcome{Stop: RunStopAnswered})
+	got := a.LastRunOutcome()
+	got.ScopeRefused[0] = "changed-by-caller"
+	if next := a.LastRunOutcome(); next.ScopeRefused[0] != "run_shell" {
+		t.Fatal("returned slice modified the stored run outcome")
+	}
+}
+
+func TestFullVisibilityPredictionRequiresConsultResolver(t *testing.T) {
+	a := New(Config{MaxTurns: 1, Output: io.Discard})
+	a.tools.SetScope(ScopeExec)
+	if a.tools.Visible(consultModelTool) {
+		t.Fatal("test requires an absent consult resolver")
+	}
+	if a.tools.visibleUnderFull(consultModelTool) {
+		t.Fatal("full-scope prediction exposed a tool without its resolver")
+	}
+	a.noteScopeRefused(consultModelTool)
+	a.setRunOutcome(RunOutcome{Stop: RunStopAnswered})
+	if got := a.LastRunOutcome(); len(got.ScopeRefused) != 0 {
+		t.Fatal("a resolver-less tool was recorded as curable by full autonomy")
+	}
+}
+
 func TestLastRunOutcomeAnswered(t *testing.T) {
 	a := New(Config{Backend: &hookBackend{}, MaxTurns: 3, MaxTokens: 100000, Output: io.Discard})
 	if err := a.Run(context.Background(), "show nodes"); err != nil {

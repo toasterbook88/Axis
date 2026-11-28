@@ -32,7 +32,9 @@ type RunOutcome struct {
 func (a *Agent) LastRunOutcome() RunOutcome {
 	a.outcomeMu.Lock()
 	defer a.outcomeMu.Unlock()
-	return a.lastOutcome
+	outcome := a.lastOutcome
+	outcome.ScopeRefused = append([]string(nil), outcome.ScopeRefused...)
+	return outcome
 }
 
 func (a *Agent) setRunOutcome(o RunOutcome) {

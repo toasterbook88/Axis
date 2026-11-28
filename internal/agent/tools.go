@@ -175,6 +175,13 @@ func (r *ToolRegistry) extraVisible(name string) bool {
 }
 
 func (r *ToolRegistry) callableNonBridge(name string) bool {
+	if r == nil {
+		return false
+	}
+	return r.callableNonBridgeInScope(name, r.scope)
+}
+
+func (r *ToolRegistry) callableNonBridgeInScope(name string, scope ToolScope) bool {
 	if r == nil || name == "" || neverTool(name) || name == "axis_summary" || isBridgeTool(name) {
 		return false
 	}
@@ -184,13 +191,13 @@ func (r *ToolRegistry) callableNonBridge(name string) bool {
 	if name == consultModelTool && r.consultResolver == nil {
 		return false
 	}
-	if execTool(name) && r.scope != ScopeExec {
+	if execTool(name) && scope != ScopeExec {
 		return false
 	}
-	if r.scope != ScopeCluster && r.extraVisible(name) {
+	if scope != ScopeCluster && r.extraVisible(name) {
 		return true
 	}
-	return toolVisible(name, r.scope)
+	return toolVisible(name, scope)
 }
 
 func (r *ToolRegistry) eager(name string) bool {
@@ -339,7 +346,7 @@ func (r *ToolRegistry) visibleUnderFull(name string) bool {
 	if _, ok := r.executors[name]; !ok {
 		return false
 	}
-	return execTool(name) || r.extraVisible(name) || toolVisible(name, ScopeExec)
+	return r.callableNonBridgeInScope(name, ScopeExec)
 }
 
 // Visible reports whether the model may call name in the current scope.
