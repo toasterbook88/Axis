@@ -2,8 +2,8 @@
 
 Date: 2026-11-28. Linear: DEA-32. Base: `ab2adcc` (v0.29.0).
 
-This spec amends the agent scope charter. Two decisions in it are marked
-**pending maintainer pick**; the text describes the recommended option for each.
+This spec amends the agent scope charter. Its two decisions were settled by the
+maintainer on 2026-11-28 with the recommended option A for both.
 
 ## Problem
 
@@ -81,7 +81,7 @@ This spec is the written amendment.
 
 ## Design
 
-### D1. Charter: which scopes show delegation (**pending maintainer pick, decision 1**)
+### D1. Charter: which scopes show delegation (**decision 1: option A, maintainer, 2026-11-28**)
 
 Recommended: `spawn_subagent`, `check_task` and `list_background_tasks` are visible at
 observe, edit and exec, and hidden at cluster.
@@ -251,7 +251,7 @@ child, the target comes from the first rule that applies:
 The target goes into the child's prompt (D3), the receipt (D8) and `backgroundTask.node`
 (`subagent.go:118`).
 
-### D5. Read-only remote tools leave the never set (**pending maintainer pick, decision 2**)
+### D5. Read-only remote tools leave the never set (**decision 2: option A, maintainer, 2026-11-28**)
 
 Recommended: `remote_read_file`, `remote_grep` and `remote_list` move from `neverTool` to
 a `remoteReadTool(name)` set visible at observe, edit and exec, hidden at cluster.
@@ -511,8 +511,9 @@ Implementation order: D1 to D6 and D8 without the `outcome` field can land on `m
 is. D7 and the `outcome` field land after the `-p` exit-code change merges, in the same PR
 if that change is merged first, or as a follow-up otherwise.
 
-The reviews below ran with both decisions open and the recommended options written in. If the maintainer picks a non-recommended option for either decision, the spec
-changes substantially and needs a new spec review before code (AGENTS.md §8, step 3).
+The reviews below ran with both decisions open and the recommended options written in.
+The maintainer then picked option A for both, the text the reviews covered, so no new
+spec review is needed before code (AGENTS.md §8, step 3).
 
 ## Review
 
