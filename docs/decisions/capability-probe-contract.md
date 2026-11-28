@@ -15,7 +15,7 @@ Two obvious sources were rejected.
 
 **A shipped hardware-specification table** (GPU model → bandwidth/TFLOPS/TOPS) would be reference data. Under the observed/inferred/absent discipline it would carry an inferred marker permanently, go stale against new hardware, and miss anything unlisted. It also cannot represent the node's actual configuration — driver version, quantization support, thermal envelope, or contention.
 
-**A synthetic microbenchmark** (STREAM-style bandwidth, FLOPS loops) would require shipping or compiling a payload on every node, expanding AXIS's footprint well past "agentless by default", and would still only proxy the thing operators care about.
+**A synthetic microbenchmark** (STREAM-style bandwidth, FLOPS loops) would require shipping or compiling a payload on every node, expanding AXIS's footprint well past the single-binary shape in `docs/doctrine.md`, and would still only proxy the thing operators care about.
 
 The direct measurement is available for free. Backends already detected by the fact plane report exact timings for real inference work.
 
@@ -64,7 +64,7 @@ A quantity whose spread exceeds a stated threshold is recorded as **unstable** a
 
 ## 5. Safety and consent
 
-- **Operator-invoked.** A probe runs only when the operator asks. Placement never triggers one. Nothing schedules one. Running benchmarks as background activity would contradict `docs/doctrine.md` ("agentless by default", "not a background scheduler", "no hidden agent runtime").
+- **Operator-invoked.** A probe runs only when the operator asks. Placement never triggers one. Nothing schedules one. Running benchmarks as background activity would contradict `docs/doctrine.md` ("not a background scheduler", "no hidden agent runtime").
 - **Refuses unsafe hosts.** Skips nodes on battery power, or in `serious`/`critical` thermal state, and reports each skip with its reason rather than omitting the node.
 - **Never downloads.** Probes use only models already present on the target node. If no suitable model exists, the node is reported as unprobed. Pulling a model would be a hidden download, which `docs/future-roadmap.md` lists under "Avoid".
 - **Bounded.** Hard ceilings on token count, wall-clock duration per node, and total sweep duration. Exceeding a ceiling aborts that probe and records a timeout, not a slow result.

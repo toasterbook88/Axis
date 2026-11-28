@@ -12,7 +12,7 @@ No generated output may present itself as cluster truth unless it is backed by
 a real snapshot or live probe.
 
 - Operator truth surfaces: `axis facts`, `axis status`, `axis task place`, `axis task context`.
-- `axis agent`, MCP, HTTP and execution surfaces are advisory. They must never weaken the fact plane.
+- `axis agent` is the front door (bare `axis` opens it). The agent, MCP, HTTP and execution surfaces are advisory. They must never weaken the fact plane.
 - Lifecycle events (`internal/events`) are observational only; subscribers get no control authority.
 - When unsure, report "not observed" — never a guessed value.
 
@@ -67,6 +67,7 @@ make install-user          # ~/.local/bin (workstation development)
 ## 4. Architecture
 
 Five trust tiers. Higher tiers consume lower-tier authority; advisory surfaces never override facts.
+Tiers rank trust. `internal/agent` sits in Layer 5 and is also the product's front door.
 
 ```text
 Layer 5  Advisory    internal/chat internal/agent internal/console internal/mcp internal/api

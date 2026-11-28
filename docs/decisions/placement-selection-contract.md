@@ -103,7 +103,7 @@ These are acquired by **explicit, operator-invoked micro-probes**, per `docs/sov
 
 **Probe discipline:**
 
-- **Operator-invoked only.** Never automatic, never on a schedule, never triggered by placement. Running capability benchmarks as background activity would contradict `docs/doctrine.md` ("agentless by default", "not a background scheduler").
+- **Operator-invoked only.** Never automatic, never on a schedule, never triggered by placement. Running capability benchmarks as background activity would contradict `docs/doctrine.md` ("not a background scheduler").
 - **Refuses unsafe hosts.** Skips nodes on battery or in a serious/critical thermal state, and reports the skip.
 - **Bounded.** Each probe has a hard time and resource ceiling.
 - **Timestamped with provenance.** Stored as capability observations carrying probe version, duration, and observation time.

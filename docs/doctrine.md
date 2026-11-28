@@ -19,7 +19,7 @@ AXIS is:
 
 - a single-binary Go CLI
 - local-first and operator-invoked
-- agentless by default
+- agent-native: a bare, interactive `axis` opens `axis agent`
 - snapshot-oriented
 - deterministic in its placement logic
 - optimized for verifiable output over hidden behavior
@@ -30,6 +30,9 @@ The core product is the fact plane:
 
 That pipeline is the center of the project.
 
+`axis agent` is the front door to it. It runs a model in a loop with tools,
+MCP servers and skills, and it reads the cluster through that pipeline.
+
 ## What AXIS Is Not
 
 AXIS is not, by default:
@@ -37,7 +40,8 @@ AXIS is not, by default:
 - a daemon-first control plane
 - a general-purpose orchestrator
 - a background scheduler
-- a hidden agent runtime
+- a hidden agent runtime: `axis agent` runs in the open, in a terminal session
+  or a `-p` one-shot
 - a replacement for SSH, Docker, Tailscale, or Ollama
 - a replacement for Git hosting or Git itself
 
@@ -68,11 +72,15 @@ This layer must remain:
 - well-tested
 - explainable
 
-### Layer 2: Optional Execution Surfaces
+### Layer 2: The Agent and Execution Surfaces
 
-Examples:
+`axis agent` is the front door. A bare, interactive `axis` opens it, and
+`axis tui` hosts the same conversation beside a live cluster view. It must take
+every claim about the cluster from Layer 1, and it acts through the surfaces
+listed below.
 
-- chat
+Surfaces the agent and the operator both use:
+
 - task execution
 - Git-aware operator assistance
 - scripts
@@ -80,7 +88,7 @@ Examples:
 - MCP tools
 - stateful placement memory
 
-These are useful only if they stay subordinate to Layer 1.
+Everything in this layer stays subordinate to Layer 1 for truth.
 
 They must not weaken the trustworthiness of the fact plane.
 
@@ -117,7 +125,7 @@ than the advisory layer beneath it.
 
 ### 5. Minimalism Is a Product Constraint
 
-"Small binary, no daemon, no server" is not just implementation trivia.
+"One binary, with the daemon and the server opt-in" is not just implementation trivia.
 It is part of the value proposition.
 
 New features should be judged partly on whether they preserve that shape.
