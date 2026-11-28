@@ -77,6 +77,8 @@ This spec is the written amendment.
 - A per-call argument that narrows a child below the parent's scope. See Alternatives.
 - Changing `maxSubAgentDepth`, `defaultSubAgentMaxTurns`, the brief fields or the
   empty-answer rule.
+- A cumulative sub-agent or request budget per session or per turn. D2's cap limits how
+  many sub-agents run at once, not how many run in total.
 - Editing `docs/doctrine.md`, `AGENTS.md` or `README.md`.
 
 ## Design
@@ -288,13 +290,25 @@ Options for the maintainer:
   finishes as cancelled, whatever `err` and `LastRunOutcome` say. A cancel that lands during
   the last turn's tool calls turns into tool errors and a nil return at the ceiling
   (`agent.go:462-518`), so the error alone cannot be trusted here.
-- `func (a *Agent) Close() []string` cancels `sessionCtx`, waits up to 3 seconds (the
-  console's own shutdown wait, `cmd/axis/agent_console_startup.go:38`) for task goroutines
-  to reach a terminal state, and returns the ids of tasks that were still running. It is
-  safe to call twice.
-- Close runs where each session really ends, and its result is printed, one line on the
-  surface's error writer when the list is not empty:
-  `cancelled N open sub-agent task(s): bg-2, bg-3`.
+- `func (a *Agent) Close() CloseReport` sets the root's `closed` flag, cancels
+  `sessionCtx` and waits up to 3 seconds (the console's own shutdown wait,
+  `cmd/axis/agent_console_startup.go:38`) for task goroutines to reach a terminal state.
+  `CloseReport` holds two id lists. `Cancelled` lists tasks that reached `cancelled`
+  inside the wait, so their goroutine has returned. `Stopping` lists tasks whose goroutine
+  had not returned when the wait ended: the cancel was requested but not confirmed,
+  because a backend call or tool that ignores its context can outlive any wait. Close
+  never reports a `Stopping` task as cancelled. A second call returns an empty report.
+- **After Close, a late task changes nothing in the session.** Every child checks its
+  `sessionCtx` before each model request and each tool call, so a child that gets control
+  back stops at the next boundary. A task goroutine that returns after Close sees
+  `closed`, records no state change or result, and writes no event to the session log; a
+  child's stream writer is already `io.Discard` (D2). A tool call already running when
+  Close fires can still finish its own side effect, such as a file write approved before
+  Close; Close cannot stop it, and the `Stopping` line says the task may still be running.
+- Close runs where each session really ends, and its report is printed on the surface's
+  error writer, one line per non-empty list:
+  `cancelled N open sub-agent task(s): bg-2, bg-3` and
+  `M sub-agent task(s) still stopping after 3s, may still be running, results dropped: bg-4`.
   - `cmd/axis/agent.go`, after `agent.New` at `:267`: a deferred closure that calls
     `a.Close()` and prints its result. This covers `-p`, the positional one-shot, the plain
     REPL and `runAgentConsole` (reached through `runAgentInteractive`,
@@ -432,11 +446,14 @@ measured; it would still send all six schemas on every round.
 Placement adds at most one view reload and one `ExplainPlacement` call per spawn, and only
 for briefs that match a workload profile.
 
-Optimization: model requests. Without a cap, one round of 6 parallel sync spawns, each
-spawning 6 more, runs 42 sub-agents of up to 6 turns each (252 model requests) with no
-prompt at observe, since `spawn_subagent` dispatches before the confirm step
-(`dispatch.go:167-169`). D2's cap of 6 running sub-agents bounds that at 6 sub-agents and 36
-child requests at the default `max_turns`.
+Optimization: concurrent model requests. Without a cap, one round of 6 parallel sync
+spawns, each spawning 6 more, runs 42 sub-agents at once with no prompt at observe, since
+`spawn_subagent` dispatches before the confirm step (`dispatch.go:167-169`). D2's cap
+bounds concurrency only: at most 6 sub-agents run at once, so at most 6 child requests are
+in flight. It does not bound the total. One depth-1 child can spend its 6 turns spawning
+one 6-turn grandchild per turn, one after another: 42 child requests with 2 sub-agents
+running at once. The total per root turn is bounded only by `maxSubAgentDepth`,
+`maxParallelTools` and `max_turns`. A cumulative budget is a non-goal.
 
 ## Validation
 
@@ -465,20 +482,27 @@ child requests at the default `max_turns`.
 - D4 table test, one case per rule, including a brief that names a lower-RAM node (rule 3
   must win over capacity), a brief naming two nodes (falls through), a snapshot node
   missing from `nodes.yaml` (never chosen), and rule 2 under D5 option B.
-- `Close()` while an async child runs ends its task as `cancelled`, returns its id and
-  cancels a grandchild; a cancel during the child's last turn still ends as `cancelled`; a
+- `Close()` while an async child runs ends its task as `cancelled`, returns its id under
+  `Cancelled` and cancels a grandchild; a cancel during the child's last turn still ends as `cancelled`; a
   second `Close()` is a no-op. A console test spawns an async child after startup returns
   and sees it still running.
 - A depth-1 child spawns an async grandchild and answers: the child's result holds the
   grandchild's receipt and result, and the child's store has no running task.
 - cmd/axis tests assert the `cancelled N open sub-agent task(s)` line on the error writer
-  for the one-shot path and for the startup console, and no line when nothing was open.
+  for the one-shot path and for the startup console, the `still stopping` line when a task
+  outlives the wait, and no line when nothing was open.
+- A child whose stub backend ignores its context and blocks past the 3-second wait:
+  Close returns after the wait with the task under `Stopping` and not under `Cancelled`.
+  When the stub later returns, the task records no state change or result, the session log
+  gets no event, the child starts no further model request or tool call, and nothing is
+  written to Output.
 - A `go test -race` case changes `/autonomy` on the root while an async child dispatches.
 - A `-p` run with a sync child writes nothing of the child's to stdout, and the child's
   badges reach the observer on stderr tagged with depth. An async child writes nothing to
   Output after the turn returns. Child tool calls appear in the root's session log.
-- After `Close()` returns, no task is still running and nothing further is written to
-  Output.
+- After `Close()` returns, every task is either terminal and listed under `Cancelled`, or
+  listed under `Stopping`; no task records a state change or writes a session-log event
+  after that, and nothing further is written to Output.
 - D4 table adds a config with both `worker` and `worker-1` and a brief naming `worker-1`;
   a node named only in `boundary` (falls through); a rule 1 name not in `nodes.yaml`
   (spawn refused); a nil or failing reload (rule 5).
@@ -487,8 +511,12 @@ child requests at the default `max_turns`.
   `nested sync/bg-1: ...` with no `check_task` hint.
 - An edit child writes a file, then the root's `undo_last` restores that write. A
   child's `todo init` leaves the root's list unchanged.
-- Under default autonomy a sync child's `write_file` prompts the operator once and an
-  async child's is refused with no prompt; under edit autonomy both run with no prompt.
+- Under default autonomy the child's scope is observe, so a sync or async child's
+  `write_file` is refused as not available in this mode, before any confirm and with no
+  prompt. Prompting is tested with a stub external MCP tool, visible at observe and not on
+  `auto_approve_tools`: a sync child's call prompts the operator once and an async child's
+  is refused with no prompt. Under edit autonomy a sync and an async child's `write_file`
+  both run with no prompt.
   A plain-REPL test confirms no prompt is read while the REPL waits for input.
 - With 6 sub-agents running across depths, a seventh spawn is refused with the no-retry
   text; after one finishes, a spawn succeeds.
