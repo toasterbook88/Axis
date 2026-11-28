@@ -39,13 +39,17 @@ build does not match what its own prompt tells it.
    placement" (`subagent.go:105`). Nothing calls the ranker. `axis_place` shows the call
    that should run: `placement.InferRequirements` then `placement.ExplainPlacement`
    (`tools.go:499-513`, [`internal/placement/explain.go:309`](../../../internal/placement/explain.go)).
-5. **Async children outlive their session.** They run under
+5. **Open async children are dropped silently at exit.** They run under
    `context.WithCancel(context.Background())` (`subagent.go:115`). `backgroundTaskStore`
    has `nextID`, `add`, `get` and `snapshot` and no way to cancel everything
    ([`internal/agent/async_tasks.go:128-168`](../../../internal/agent/async_tasks.go)). `Agent`
    has no close hook; both surfaces build it with `agent.New` and drop it
-   (`cmd/axis/agent.go:267`, `cmd/axis/agent_console_startup_job.go:343`). The task state
-   machine has no cancelled state (`async_tasks.go:38-50`).
+   (`cmd/axis/agent.go:267`, `cmd/axis/agent_console_startup_job.go:343`). Both sessions
+   end with the CLI process, so a child never outlives it; a child still running at exit
+   just vanishes with no line saying so. The task state machine has no cancelled state
+   (`async_tasks.go:38-50`). A depth-1 child's own async tasks go in the child's private
+   store (`subagent.go:242-244`, `:122-123`), which nothing reads once the child returns:
+   the parent's `check_task` reads only its own store (`dispatch.go:173-178`).
 6. **A child at its turn ceiling reads as silence.** `Run` returns nil at the ceiling
    (`agent.go:517-518`), so a child that ran out of turns surfaces as "sub-agent returned
    no final answer" (`subagent.go:169-171`), the same as one that answered with nothing.
@@ -98,8 +102,10 @@ observe, edit and exec, and hidden at cluster.
   eager allowlist is set (`tools.go:196-204`). They show in the deferred catalog of the
   system prompt by name and summary (`internal/agent/deferred.go:862-877`) and run through
   `tool_call`, which ends in the same `dispatchToolCall` (`dispatch.go:321-335`).
-  `--eager-tools` can still name them; `--no-defer-tools` sends them eagerly. This keeps
-  the observe request size where it is (see Research).
+  `--eager-tools` can still name them; `--no-defer-tools` sends them eagerly. Any deferred
+  tool turns on the `tool_search` and `tool_call` pair (`tools.go:206-217`, `:269-286`), so
+  a session with no MCP tools now carries that pair; a session with an MCP server already
+  does. Research has the measured cost.
 
 Delegation never widens what a session can do: D2 shares the root's approval state with
 every child and caps each child at the root's current scope. A read-only parent gets read-only peers, which is the
@@ -134,7 +140,9 @@ Options for the maintainer:
   parent's scope. At each dispatch, a child also refuses a tool the root's registry would
   not show at the root's current scope, with the existing "not available in this mode"
   error (`dispatch.go:124-126`). Lowering `/autonomy` on the root narrows running children
-  on their next call; raising it does not widen a child past its spawn scope.
+  on their next call; raising it does not widen a child past its spawn scope. The child
+  reads the root's scope under the root's `dispatchMu`, the lock `SetAutonomy` writes it
+  under (`agent.go:310-319`).
 - `consult_model` stays hidden in the child (no resolver, `tools.go:181-186`); a child
   seat is the seat-placement direction.
 - At `maxSubAgentDepth` the child's registry withholds `spawn_subagent`: a small
@@ -151,6 +159,12 @@ Options for the maintainer:
   "Your target node is %q" when one is set, nothing when none is.
 - When `spawn_subagent` is visible to the child, its prompt adds one line: it may delegate
   one level further with a full brief.
+- `VisibleToolPrompt`'s scope line tells the model to ask the operator to elevate
+  (`scope.go:176-186`). A child answers to its parent, so for a child that line says to
+  report what mode the task needs in its answer instead.
+- `spawn_subagent`'s own description and `target_node` text (`subagent.go:40-55`) are
+  rewritten to say the child inherits the parent's scope and approvals, and to give D4's
+  resolution order.
 
 ### D4. An empty `target_node` is resolved, and ranked only when the task has a profile
 
@@ -164,9 +178,10 @@ child, the target comes from the first rule that applies:
 2. **No node-scoped tools.** The child's registry shows none of `remote_read_file`,
    `remote_grep` or `remote_list` (only possible under D5 option B or C): no target.
    Reason `none (no node-scoped tools at <scope>)`.
-3. **Named in the brief.** Exactly one node name from `view.Config.Nodes` appears as a
-   whole word in `objective`, `prompt`, `sources` or `boundary`: use it. Reason
-   `named in brief`. Config names are the names `runRemote` resolves
+3. **Named in the brief.** Split `objective`, `prompt`, `sources` and `boundary` into
+   tokens on whitespace and on punctuation other than `-`, `_` and `.`, and trim a trailing
+   `.` from each. Exactly one node name from `view.Config.Nodes` equals a token: use it.
+   Reason `named in brief`. A brief saying "worker-1" matches `worker-1` and not `worker`. Config names are the names `runRemote` resolves
    (`tools_cluster.go:35-39`), so the target is always reachable by the child's tools.
 4. **Ranked.** `reqs := placement.InferRequirements(objective + "\n" + prompt)` matched a
    workload profile (`reqs.Workload.Class != models.ClassUnknown`, see
@@ -174,8 +189,10 @@ child, the target comes from the first rule that applies:
    tools do (`dispatch.go:133-148`), keep only snapshot nodes that also appear in
    `view.Config.Nodes`, and call `placement.ExplainPlacement(reqs, nodes, view.State)`, the
    call `axis_place` makes (`tools.go:499-513`). Decision OK: use `Decision.Node`, reason
-   `placement: <class>, <decisive criterion>, <metric name> = <value><unit>` built from the
-   decision's ranking. Not OK: no target, reason `placement: no eligible node (N excluded)`.
+   `placement suggests for <class>: <decisive criterion>, <metric name> = <value><unit>`,
+   built from the decision's ranking. The child only reads on that node (D5), so the word
+   is suggests: the ranker picks where the task's work would fit, and the receipt does
+   not claim the child runs it there. Not OK: no target, reason `placement: no eligible node (N excluded)`.
 5. **Otherwise** no target. Reason `none (not set by parent)`. The child picks with its
    remote tools.
 
@@ -236,14 +253,24 @@ Options for the maintainer:
     `axis tui` (`cmd/axis/tui.go:61`).
 - Sync children already run on the parent's turn context (`subagent.go:154`) and are
   unchanged.
+- **A child finishes its own async tasks before it returns.** When a child's `Run`
+  returns, `dispatchSubagent` waits for every task still running in that child's store,
+  then appends each one's receipt line and result (or error) to the child's answer. Each
+  grandchild is bounded by its own `max_turns`, so the wait ends; a session cancel ends it
+  at once. This is the behavior the Claude Code docs give a subagent with background
+  subagents (Research). No grandchild is left in a store nobody reads, and the root store
+  holds every task the root's model can query.
 
 The word `cancelled` matches A2A and MCP task states. If DEA-31 lands a shared state
 vocabulary first, D6 uses its word.
 
 ### D7. The child's result uses `LastRunOutcome`
 
-Depends on the approved exit-code change (`RunOutcome`, `RunStop`, `LastRunOutcome`; see
-DEA-31). After `child.Run`, `dispatchSubagent` reads `child.LastRunOutcome()`:
+Depends on the approved `-p` exit-code change (`RunOutcome`, `RunStop`, `LastRunOutcome`),
+which is not on `main` yet, and DEA-31's spec
+`2026-11-28-agent-run-outcome-states-design.md` builds on it. D7 and the receipt's
+`outcome` field land after that change merges; see Review sequencing. After `child.Run`,
+`dispatchSubagent` reads `child.LastRunOutcome()`:
 
 | Stop | Child text | Sync result | Async task |
 |---|---|---|---|
@@ -253,10 +280,7 @@ DEA-31). After `child.Run`, `dispatchSubagent` reads `child.LastRunOutcome()`:
 | failed | any | existing `sub-agent failed: %w` (`subagent.go:155`) | failed, error line |
 
 Every error row starts with the receipt line (D8), then a newline, then the error text, so
-the parent sees where the child ran even when it failed. The no-invented-answer rule stays. Under the exit-code change a piped run's confirm records
-denials (`pipedConfirm(w, rec)`); the child holds the parent's confirm (`confirm.go:147`),
-so a child's denied call lands in the parent's `pending_approvals` (inferred from the
-patch, not run).
+the parent sees where the child ran even when it failed. The no-invented-answer rule stays.
 
 ### D8. The spawn receipt
 
@@ -265,7 +289,7 @@ Illustrative values:
 
 ```text
 sub-agent bg-3 async | node: builder (named in brief) | scope: observe | depth: 1 | max_turns: 6
-sub-agent sync | node: worker-1 (placement: go-build, allocatable_capacity, allocatable_ram = 7168MB) | scope: edit | depth: 1 | max_turns: 6 | outcome: answered 4/6
+sub-agent sync | node: worker-1 (placement suggests for go-build: allocatable_capacity, allocatable_ram = 7168MB) | scope: edit | depth: 1 | max_turns: 6 | outcome: answered 4/6
 ```
 
 Async receipts end with the existing `check_task` hint (`subagent.go:145-146`). Sync
@@ -276,6 +300,8 @@ result, read by the parent model; no JSON shape changes.
 
 - `docs/current-state.md`: one bullet for the reachable peer loop.
 - `docs/release-notes.md`: the scope change, the receipt, and `cancelled`.
+- `docs/decisions/agent-model-consult.md:13` says `spawn_subagent` is hidden by
+  `neverTool`; that sentence changes to the chosen D1 scopes.
 - `docs/superpowers/specs/2026-11-16-delegation-brief-design.md` is left as written; this
   spec supersedes its `:32` statement.
 
@@ -315,16 +341,24 @@ External prior art:
   2026-11-28): sub-agents inherit the built-in and MCP tools of the main conversation and,
   when unset, its permission mode. A sub-agent can spawn its own, up to three layers below
   the main conversation, and at the depth limit the `Agent` tool is withheld. D2 follows
-  the same shape: inherit by default, withhold the spawn tool at the cap.
+  the same shape: inherit by default, withhold the spawn tool at the cap. In an
+  interactive session a subagent that launches background subagents waits for their
+  results before it finishes; under `claude -p` and the Agent SDK a background nested
+  subagent reports to the main conversation instead. D6 takes the interactive behavior,
+  since axis has no main-conversation channel a grandchild could report to.
 - A2A `TaskState` ([`specification/a2a.proto`](https://raw.githubusercontent.com/a2aproject/A2A/main/specification/a2a.proto))
   and MCP tasks ([2025-11-25 tasks](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/specification/2025-11-25/basic/utilities/tasks.mdx))
   both have a cancelled terminal state; D6 uses the same word.
 
 Optimization: request size. Measured at `ab2adcc` with a throwaway test marshalling
-`Defs()`: observe sends 13 tools in 6565 bytes. Made eager, the six tools this spec
-reveals add 3752 bytes (57%), `spawn_subagent` alone 1553. That cost lands on every model
-round of every default session and moves compaction timing. Loading them deferred (D1)
-keeps eager `Defs()` at 6565 bytes; the deferred catalog adds one summary line per tool.
+`Defs()` for a session with no MCP tools: observe sends 13 tools in 6565 bytes. Made
+eager, the six tools this spec reveals add 3752 bytes (57%), `spawn_subagent` alone 1553.
+Deferred (D1), eager `Defs()` is 15 tools in 8086 bytes (+1521, 23%): the six tools leave
+and the `tool_search`/`tool_call` pair arrives. The deferred catalog adds one summary line
+of at most 80 runes per tool to the system prompt (`deferred.go:24-28`). Deferred is the
+smaller of the two, and with any MCP server configured the pair is already sent, so the
+delta there is only the catalog lines. Shortening the descriptions instead was not
+measured; it would still send all six schemas on every round.
 Placement adds at most one view reload and one `ExplainPlacement` call per spawn, and only
 for briefs that match a workload profile.
 
@@ -338,10 +372,12 @@ for briefs that match a workload profile.
   from eager `Defs()` by default; `run_on_node`, `fleet_exec`, `remote_write_file`,
   `remote_tail_logs` and `run_background` stay hidden at every scope and denied on the
   direct path.
-- Budget and compaction tests (`agent_backend_turn_test.go:122`, `request_test.go:347`,
-  `sessionlog_compaction_test.go:44`) stay green unchanged. They failed in the spec review's
-  probe with the tools eager; deferred loading must keep them green without resizing their
-  fixtures.
+- Budget and deferral tests that pin a no-MCP observe request: `agent_backend_turn_test.go:122`
+  and `request_test.go:347` (compaction timing, fixtures resized to the 8086-byte baseline),
+  `deferred_tools_test.go:86` (no bridge with zero deferred tools; becomes a scope that
+  defers nothing) and `deferred_bounds_test.go:30` (catalog cap, re-measured).
+  `sessionlog_compaction_test.go:44` stays green unchanged. The second spec review's probe
+  failed the first four with D1 applied.
 - A child spawned from an edit parent can call `write_file`; one from an observe parent
   cannot. After the root drops to observe, a running edit child's next `write_file` is
   refused.
@@ -357,12 +393,22 @@ for briefs that match a workload profile.
   cancels a grandchild; a cancel during the child's last turn still ends as `cancelled`; a
   second `Close()` is a no-op. A console test spawns an async child after startup returns
   and sees it still running.
+- A depth-1 child spawns an async grandchild and answers: the child's result holds the
+  grandchild's receipt and result, and the child's store has no running task.
+- cmd/axis tests assert the `cancelled N open sub-agent task(s)` line on the error writer
+  for the one-shot path and for the startup console, and no line when nothing was open.
+- A `go test -race` case changes `/autonomy` on the root while an async child dispatches.
+- D4 table adds a config with both `worker` and `worker-1` and a brief naming `worker-1`.
 - A child that hits its ceiling returns the turn-ceiling error, sync and async, with the
   receipt line first; answered and failed paths keep their current text after the receipt.
 - Existing subagent tests (`internal/agent/subagent_test.go`) stay green; run the hermetic
   agent tests, `go vet`, `hack/verify-specs.go` and the full preflight.
 
 ## Review sequencing
+
+Implementation order: D1 to D6 and D8 without the `outcome` field can land on `main` as it
+is. D7 and the `outcome` field land after the `-p` exit-code change merges, in the same PR
+if that change is merged first, or as a follow-up otherwise.
 
 The reviews below ran with both decisions open and the recommended options written in. If the maintainer picks a non-recommended option for either decision, the spec
 changes substantially and needs a new spec review before code (AGENTS.md §8, step 3).
