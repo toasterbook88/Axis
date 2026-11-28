@@ -245,3 +245,64 @@ Verdict: approve-with-changes
 3. Minor: `ServeStreamableHTTP` happy path was uncovered and spec §3/§4 references drifted from `internal/mcp/http.go` and test wiring. Fixed in b97c3eff: added `TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel` and `TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS` and updated spec §3/§4 to match.
 
 Note: two independent diff reviews were run per AGENTS.md §8 step 4 (changes span 4 packages: `internal/config`, `internal/mcpclient`, `internal/mcp`, `cmd/axis`).
+
+Kind: spec
+Reviewer: fresh-context Claude reviewer, given only docs/superpowers/review-prompt.md and its five inputs
+Model: Anthropic Claude (claude-opus-5-5)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: 2bb14d0a5c06e0038425b4a0f8d65f9f10d41b7d
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Minor: the amendment was not carried into the tests, status, or alternatives, and the init change was omitted. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: the test plan names ValidateMCPServers, SaveAtomic, the init replace prompt, and the stdio startup boundary. Alternatives records the rejected Load behavior. The init contract says accepting replacement builds a fresh configuration without the old optional sections.
+
+2. Minor: tests stayed green when the doctor fail check or ConnectAll stdio ordering broke. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: TestDoctorInvalidMCPEntryFailsWithoutProbing requires a failed named check and no HTTP probe, and TestConnectAllRejectsInvalidStdioBeforeStarting uses HTTP-only auth fields with a nonexistent command.
+
+3. Minor: the doctor probe signature and behavior changed despite the old non-goal. Fixed in 31babc3ab2a7316c406ad2244f467255fd6dd005 for the follow-up scope, and in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb for the design text: doctor resolves the same headers and bearer references as the client and uses PinnedTLSConfig, and the old doctor exclusion is limited to that reviewed probe.
+
+4. Minor: an authenticated Streamable HTTP probe drained the body until the five-second timeout. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: probeDoctorHTTPEndpoint closes a text/event-stream body without draining it, and TestDoctorMCPProbeDoesNotDrainSSE covers the plain and charset variants.
+
+5. Minor: an unrelated release-claims gate change rode on the diff with no spec text. Fixed in 31babc3ab2a7316c406ad2244f467255fd6dd005: the follow-up scope records it as an independent release-gate bug fix, including the pending-version count and the no-tags skip.
+
+Questions:
+
+- For an invalid entry, does accepting init replacement drop the other optional sections? verified: the init contract keeps the existing fresh-configuration behavior. Accepting replacement omits the old optional sections and keeps the backup. Declining leaves the original file unchanged.
+
+- Should Load record per-entry errors or drop invalid entries so a later consumer cannot skip the check? verified: Alternatives rejects that larger change. Entries stay intact, and every connection or probe consumer must call the shared validator.
+
+- Commit 31babc3a landed during this review and was outside its inputs. Did it resolve the doctor non-goal and the release-claims scope? verified: this spec review was not repeated at that commit. Its follow-up scope text is in 31babc3ab2a7316c406ad2244f467255fd6dd005, and both diff reviews below approve d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb.
+
+Note: the reviewer reported 72 turns and a completed verdict. During the review the worktree moved to 31babc3ab2a7316c406ad2244f467255fd6dd005. That commit is outside this block's Head. The code fixes above are in the later diff-reviewed head.
+
+Kind: diff
+Reviewer: fresh-context Codex reviewer A
+Model: OpenAI GPT
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb
+Date: 2026-11-28
+Verdict: approve
+
+Questions:
+
+- Follow-up review records still need appending to the spec. This review does not establish that recordkeeping step. verified: this block and the two blocks around it are that append.
+
+Note: isolated clone /tmp/pr686-rereview-39cmKJ. Focused config, MCP client, and doctor/init tests passed.
+  Authenticated SSE plain and charset variants returned in 204.532us and 205.367us.
+  Replacing doctor.go with the preceding head made both new SSE regressions fail after their two-second deadlines. Restoring the corrected file passed in 2.116267ms and 514.946us, and the clone was clean.
+  Retained network-guard tests, the spec gate (25 specs, 3 grandfathered), import tiers, and whitespace passed.
+  This review had no code findings.
+
+Kind: diff
+Reviewer: independent fresh-context Codex reviewer B
+Model: OpenAI GPT
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb
+Date: 2026-11-28
+Verdict: approve
+
+Note: isolated clone /tmp/pr686-second-review.qGuqVm. The full diff and amended spec were reviewed.
+  Full affected suites internal/config, internal/mcpclient, and cmd/axis passed with a hermetic HOME.
+  The release-claims regression suite passed.
+  Public-boundary, spec (25 specs, 3 grandfathered), import tiers, doc-facts, and repo-truth gates passed.
+  Complete diff whitespace and isolated-checkout cleanliness passed.
+  This review had no findings and no questions.
