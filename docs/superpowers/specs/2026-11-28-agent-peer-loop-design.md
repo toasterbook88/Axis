@@ -93,9 +93,16 @@ observe, edit and exec, and hidden at cluster.
   while this spec stands.
 - Update the `check_task` and `list_background_tasks` descriptions (`async_tasks.go:422-441`)
   to say they report async sub-agents.
+- The newly visible tools load deferred by default. Add a `deferredBuiltin(name)` set
+  (the three tools here plus D5's three) and make `eager` return false for it when no
+  eager allowlist is set (`tools.go:196-204`). They show in the deferred catalog of the
+  system prompt by name and summary (`internal/agent/deferred.go:862-877`) and run through
+  `tool_call`, which ends in the same `dispatchToolCall` (`dispatch.go:321-335`).
+  `--eager-tools` can still name them; `--no-defer-tools` sends them eagerly. This keeps
+  the observe request size where it is (see Research).
 
-Delegation never widens what a session can do: D2 gives the child the parent's scope,
-confirm, approvals and block. A read-only parent gets read-only peers, which is the
+Delegation never widens what a session can do: D2 shares the root's approval state with
+every child and caps each child at the root's current scope. A read-only parent gets read-only peers, which is the
 cheapest useful delegation (parallel reading).
 
 Options for the maintainer:
@@ -110,11 +117,24 @@ Options for the maintainer:
   `configureRegistry(r, registryConfig{Scope, EagerTools, DisableDeferral, ResultCap, MCP})`,
   and call it from `New` and `buildChildAgent`. The child's config comes from the parent's
   registry at spawn time.
-- `buildChildAgent` sets `child.autonomy` to the parent's mode under the same lock it uses
-  for the approval snapshot. It keeps the parent's confirm as is: that confirm is already
-  wrapped for the parent's mode (`agent.go:206`, `:326`), so the child must not wrap it again.
-- The child's scope is fixed at spawn. An `/autonomy` change on the parent applies to
-  children spawned after it, not to children already running.
+- `buildChildAgent` sets `child.autonomy` to the parent's mode. It keeps the parent's
+  confirm as is: that confirm is already wrapped for the parent's mode (`agent.go:206`,
+  `:326`), so the child must not wrap it again.
+- **Approval state is shared, not copied.** Today the child gets a copy of
+  `sessionApproved` and `blockAll` (`confirm.go:137-148`, `subagent.go:206`, `:239-240`), and
+  an answer given to a child's prompt is written on the child alone
+  (`dispatch.go:259-271`). Each prompt also locks only its own agent's confirm gate. With
+  edit and exec children reachable, a "never" answered in a child would leave the parent
+  running, and two agents could prompt on one terminal at once. So `Agent` gains a
+  `root *Agent` (nil on the root). Every read or write of `sessionApproved` and `blockAll`,
+  and every prompt through `askConfirm` (`agent.go:279-289`), goes to the root's fields,
+  the root's `dispatchMu` and the root's confirm gate. "Always" in a child approves the
+  tool for the session; "never" in a child blocks the session.
+- **The root's current scope caps every child.** A child's registry starts at the
+  parent's scope. At each dispatch, a child also refuses a tool the root's registry would
+  not show at the root's current scope, with the existing "not available in this mode"
+  error (`dispatch.go:124-126`). Lowering `/autonomy` on the root narrows running children
+  on their next call; raising it does not widen a child past its spawn scope.
 - `consult_model` stays hidden in the child (no resolver, `tools.go:181-186`); a child
   seat is the seat-placement direction.
 - At `maxSubAgentDepth` the child's registry withholds `spawn_subagent`: a small
@@ -132,25 +152,35 @@ Options for the maintainer:
 - When `spawn_subagent` is visible to the child, its prompt adds one line: it may delegate
   one level further with a full brief.
 
-### D4. An empty `target_node` uses the ranker
+### D4. An empty `target_node` is resolved, and ranked only when the task has a profile
 
-In `dispatchSubagent`, before building the child, when `strings.TrimSpace(sa.TargetNode)`
-is empty and the child's registry shows at least one node-addressed tool (under D1 and D5
-as recommended, `remote_read_file`, `remote_grep` or `remote_list`):
+The child's model runs in this process (Non-goals), and under D5 its node-addressed tools
+are bounded reads (`head -c 32000`, `ls`, `grep`, `tools_cluster.go:94-200`). Ranking by
+free capacity optimizes nothing for a read. So, in `dispatchSubagent`, before building the
+child, the target comes from the first rule that applies:
 
-1. `view := a.toolContext.GetView()`. No snapshot or no nodes: no target, reason
-   `placement: no nodes in snapshot`.
-2. `reqs := placement.InferRequirements(objective + "\n" + prompt)`, then
-   `exp := placement.ExplainPlacement(reqs, view.Snapshot.Nodes, view.State)`, the same call
-   `axis_place` makes (`tools.go:499-513`).
-3. `exp.Decision.OK`: the target is `exp.Decision.Node`; the reason is the first three lines
-   of `exp.Decision.Reasoning`. Not OK: no target, reason `placement: no eligible node
-   (N excluded)`.
+1. **Set by parent.** `strings.TrimSpace(sa.TargetNode)` is not empty: use it. Reason
+   `set by parent`.
+2. **No node-scoped tools.** The child's registry shows none of `remote_read_file`,
+   `remote_grep` or `remote_list` (only possible under D5 option B or C): no target.
+   Reason `none (no node-scoped tools at <scope>)`.
+3. **Named in the brief.** Exactly one node name from `view.Config.Nodes` appears as a
+   whole word in `objective`, `prompt`, `sources` or `boundary`: use it. Reason
+   `named in brief`. Config names are the names `runRemote` resolves
+   (`tools_cluster.go:35-39`), so the target is always reachable by the child's tools.
+4. **Ranked.** `reqs := placement.InferRequirements(objective + "\n" + prompt)` matched a
+   workload profile (`reqs.Workload.Class != models.ClassUnknown`, see
+   `internal/workload/match.go:41-45`): reload the view under `dispatchMu` the way cluster
+   tools do (`dispatch.go:133-148`), keep only snapshot nodes that also appear in
+   `view.Config.Nodes`, and call `placement.ExplainPlacement(reqs, nodes, view.State)`, the
+   call `axis_place` makes (`tools.go:499-513`). Decision OK: use `Decision.Node`, reason
+   `placement: <class>, <decisive criterion>, <metric name> = <value><unit>` built from the
+   decision's ranking. Not OK: no target, reason `placement: no eligible node (N excluded)`.
+5. **Otherwise** no target. Reason `none (not set by parent)`. The child picks with its
+   remote tools.
 
-When the child has no node-addressed tool, placement does not run and the reason is
-`target: none (no node-scoped tools at <scope>)`. An explicit `target_node` is used as
-given, with reason `target: set by parent`. The placed node goes into the child's prompt
-(D3) and into `backgroundTask.node` (`subagent.go:118`).
+The target goes into the child's prompt (D3), the receipt (D8) and `backgroundTask.node`
+(`subagent.go:118`).
 
 ### D5. Read-only remote tools leave the never set (**pending maintainer pick, decision 2**)
 
@@ -171,9 +201,10 @@ separate decision from D1.
 Options for the maintainer:
 
 - **A (recommended):** visible at observe, edit and exec.
-- **B:** visible at edit and exec only. Observe children stay local; placement (D4) runs
-  only for edit and exec children.
-- **C:** stay in the never set. D4 never runs; this spec still fixes D2, D3, D6 and D7.
+- **B:** visible at edit and exec only. Observe children stay local; D4 rule 2 applies to
+  them.
+- **C:** stay in the never set. D4 always stops at rule 2; this spec still fixes D2, D3,
+  D6 and D7.
 
 ### D6. Async children are cancelled with the session
 
@@ -183,14 +214,26 @@ Options for the maintainer:
 - Async children run under `context.WithCancel(a.sessionCtx)` instead of
   `context.Background()` (`subagent.go:115`).
 - New terminal state `bgTaskCancelled`, legal from `bgTaskRunning` only
-  (`async_tasks.go:40-50`), labelled `cancelled` by both `checkLabel` and `listLabel`. When a
-  child's run ends with `errors.Is(err, context.Canceled)` and its session context is done,
-  the task finishes as cancelled, not failed.
+  (`async_tasks.go:40-50`), labelled `cancelled` by both `checkLabel` and `listLabel`. When
+  the async goroutine's `child.Run` returns and the task's context is done, the task
+  finishes as cancelled, whatever `err` and `LastRunOutcome` say. A cancel that lands during
+  the last turn's tool calls turns into tool errors and a nil return at the ceiling
+  (`agent.go:462-518`), so the error alone cannot be trusted here.
 - `func (a *Agent) Close() []string` cancels `sessionCtx` and returns the ids of tasks that
   were still running. It is safe to call twice.
-- Both surfaces call `defer a.Close()` after `agent.New` (`cmd/axis/agent.go:267`,
-  `cmd/axis/agent_console_startup_job.go:343`) and print one stderr line when the list is
-  not empty: `cancelled N open sub-agent task(s): bg-2, bg-3`.
+- Close runs where each session really ends, and its result is printed, one line on the
+  surface's error writer when the list is not empty:
+  `cancelled N open sub-agent task(s): bg-2, bg-3`.
+  - `cmd/axis/agent.go`, after `agent.New` at `:267`: a deferred closure that calls
+    `a.Close()` and prints its result. This covers `-p`, the positional one-shot, the plain
+    REPL and `runAgentConsole` (reached through `runAgentInteractive`,
+    `cmd/axis/agent_repl.go:66`), which all return inside the same `RunE`.
+  - The startup console builds its agent inside a startup job that returns once the agent
+    is bound (`cmd/axis/agent_console_startup_job.go:152-190`, `:329-379`), so Close must not
+    go there. It goes in `runAgentConsoleStartup` after `prog.Run()` returns and the job is
+    drained, next to `l.boundAgent()` (`cmd/axis/agent_console_startup.go:301-312`). The
+    terminal is restored by then, so the line goes to `errW`. This covers `axis agent` and
+    `axis tui` (`cmd/axis/tui.go:61`).
 - Sync children already run on the parent's turn context (`subagent.go:154`) and are
   unchanged.
 
@@ -209,7 +252,8 @@ DEA-31). After `child.Run`, `dispatchSubagent` reads `child.LastRunOutcome()`:
 | turn_ceiling | any | error: `sub-agent stopped at its N-turn ceiling without a final answer; the parent must not invent one` | failed, same line |
 | failed | any | existing `sub-agent failed: %w` (`subagent.go:155`) | failed, error line |
 
-The no-invented-answer rule stays. Under the exit-code change a piped run's confirm records
+Every error row starts with the receipt line (D8), then a newline, then the error text, so
+the parent sees where the child ran even when it failed. The no-invented-answer rule stays. Under the exit-code change a piped run's confirm records
 denials (`pipedConfirm(w, rec)`); the child holds the parent's confirm (`confirm.go:147`),
 so a child's denied call lands in the parent's `pending_approvals` (inferred from the
 patch, not run).
@@ -220,8 +264,8 @@ Every spawn returns, and verbose mode prints, one receipt line before anything e
 Illustrative values:
 
 ```text
-sub-agent bg-3 async | node: worker-1 (placement: most free RAM 41200MB; gpu cuda) | scope: observe | depth: 1 | max_turns: 6
-sub-agent sync | node: none (no node-scoped tools at cluster) | scope: observe | depth: 1 | max_turns: 6 | outcome: answered 4/6
+sub-agent bg-3 async | node: builder (named in brief) | scope: observe | depth: 1 | max_turns: 6
+sub-agent sync | node: worker-1 (placement: go-build, allocatable_capacity, allocatable_ram = 7168MB) | scope: edit | depth: 1 | max_turns: 6 | outcome: answered 4/6
 ```
 
 Async receipts end with the existing `check_task` hint (`subagent.go:145-146`). Sync
@@ -276,34 +320,51 @@ External prior art:
   and MCP tasks ([2025-11-25 tasks](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/specification/2025-11-25/basic/utilities/tasks.mdx))
   both have a cancelled terminal state; D6 uses the same word.
 
-Optimization: none applies. Placement adds one `ExplainPlacement` call per spawn over the
-snapshot's nodes, the same cost as one `axis_place` call. No measurement was taken.
+Optimization: request size. Measured at `ab2adcc` with a throwaway test marshalling
+`Defs()`: observe sends 13 tools in 6565 bytes. Made eager, the six tools this spec
+reveals add 3752 bytes (57%), `spawn_subagent` alone 1553. That cost lands on every model
+round of every default session and moves compaction timing. Loading them deferred (D1)
+keeps eager `Defs()` at 6565 bytes; the deferred catalog adds one summary line per tool.
+Placement adds at most one view reload and one `ExplainPlacement` call per spawn, and only
+for briefs that match a workload profile.
 
 ## Validation
 
-- `scope_test.go`: under the chosen D1 and D5 options, the tools are visible at exactly
-  the chosen scopes and hidden at cluster; `run_on_node`, `fleet_exec`, `remote_write_file`,
+- Scope pins to update under the chosen D1 and D5 options: `scope_test.go:59`, `:80`,
+  `:98`, `:141`, `:178-180`, `:337`; `deferred_tools_test.go:165-183`, `:352-365`, `:502-508`
+  (pick another never-set tool, such as `fleet_exec`, for the bridge refusal case);
+  `agent_test.go:136-140`; `autonomy_test.go:38`; `session_approval_test.go:249`. New
+  pins: the tools are visible at exactly the chosen scopes, hidden at cluster, and absent
+  from eager `Defs()` by default; `run_on_node`, `fleet_exec`, `remote_write_file`,
   `remote_tail_logs` and `run_background` stay hidden at every scope and denied on the
-  direct path. Update the existing pins (`scope_test.go:59`, `:141`, `:337`).
+  direct path.
+- Budget and compaction tests (`agent_backend_turn_test.go:122`, `request_test.go:347`,
+  `sessionlog_compaction_test.go:44`) stay green unchanged. They failed in the spec review's
+  probe with the tools eager; deferred loading must keep them green without resizing their
+  fixtures.
 - A child spawned from an edit parent can call `write_file`; one from an observe parent
-  cannot. A child inherits a session block and an "always" approval and no blanket yes.
-- The child's system prompt lists exactly its registry's `Defs()` names and none of the
-  removed hard-coded names when they are hidden.
+  cannot. After the root drops to observe, a running edit child's next `write_file` is
+  refused.
+- "Never" answered in a child blocks the root; "always" answered in a child approves the
+  tool on the root. Parent and child prompts never overlap (one in flight).
+- The child's system prompt lists exactly its registry's eager and deferred names and none
+  of the old hard-coded names that are hidden.
 - A depth-1 child sees `spawn_subagent`; a depth-2 child does not.
-- Empty `target_node` with a fixture snapshot picks the `ExplainPlacement` winner and the
-  receipt carries its reasoning; empty snapshot and no-eligible-node give the stated
-  reasons; no node-scoped tools skips placement.
-- `Close()` during a running async child ends its task as `cancelled`, returns its id, and
-  cancels a grandchild; a second `Close()` is a no-op.
-- A child that hits its ceiling returns the turn-ceiling error, sync and async; answered and
-  failed paths keep their current results.
+- D4 table test, one case per rule, including a brief that names a lower-RAM node (rule 3
+  must win over capacity), a brief naming two nodes (falls through), a snapshot node
+  missing from `nodes.yaml` (never chosen), and rule 2 under D5 option B.
+- `Close()` while an async child runs ends its task as `cancelled`, returns its id and
+  cancels a grandchild; a cancel during the child's last turn still ends as `cancelled`; a
+  second `Close()` is a no-op. A console test spawns an async child after startup returns
+  and sees it still running.
+- A child that hits its ceiling returns the turn-ceiling error, sync and async, with the
+  receipt line first; answered and failed paths keep their current text after the receipt.
 - Existing subagent tests (`internal/agent/subagent_test.go`) stay green; run the hermetic
   agent tests, `go vet`, `hack/verify-specs.go` and the full preflight.
 
 ## Review sequencing
 
-The review below ran on this draft with both decisions open and the recommended options
-written in. If the maintainer picks a non-recommended option for either decision, the spec
+The reviews below ran with both decisions open and the recommended options written in. If the maintainer picks a non-recommended option for either decision, the spec
 changes substantially and needs a new spec review before code (AGENTS.md §8, step 3).
 
 ## Review
