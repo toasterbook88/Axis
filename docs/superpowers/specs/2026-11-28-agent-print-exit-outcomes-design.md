@@ -239,3 +239,23 @@ Questions:
 
 - The spec changed after its spec review (scope-hidden tools, the startup document, the `--max-turns` refusal). Open: those changes came from the review findings themselves and this diff review covered them; whether they need a second spec review is the maintainer's call.
 - A model that retries a denied step inflates `pending_approvals`. Verified: since ed77d20 the recorder keeps one entry per tool and request; `TestPipedApprovalsDedupeRetries`.
+
+Kind: diff
+Reviewer: fresh-context subagent D, after the Devin fixes (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude Opus 5.5 (same family as the author)
+Base: 108433031b712b3ce4799f850c8f737da8e2bf4c
+Head: db2b6ffded8630ff91ce5265007ee6136c7ab348
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Major: a score-100 deny on `fleet_exec` reported `clears: interactive approval`, though its guarded runner re-applies the same rules. Fixed in d25cc22: `fleet_exec` is a re-check surface and reports `none`; `TestPipedConfirmRecordsDenials`.
+
+2. Minor: the flag-error scan matched `--format json` exactly, so `JSON` or ` json` wrote no document, and an unknown shorthand stopped the scan before a later `-p`. Fixed in d25cc22: the value is lowercased and trimmed as the runtime parse does, and an unknown shorthand is skipped; `TestRootAgentFlagErrorsWriteFailedDocument`.
+
+3. Minor: reverting `main` to plain `Execute`, or dropping the picker's output check, left the tests green. Fixed in d25cc22: `TestMainWritesDocumentOnFlagError` runs `main` in a subprocess, and `TestStartupPickerNeedsTerminalAtBothEnds` covers both ends; each fails under its mutation.
+
+Questions:
+
+- Does the daemon path re-apply the rules for a step denied at score 100? Open: `-p` runs in process and never takes that path; out of scope for this change.
+- Can a turbo rewrite turn a denied command into an allowed one? Verified: `turboexec.Prepare` only appends `--ctx-size` and `--flash-attn`, and the evaluator runs on the rewritten command (`internal/execution/prepare.go:414-418`).
+- `--bogus -p --format json` cannot tell whether `-p` is the unknown flag's value. Open: the scan treats `-p` as a flag and writes a document, which errs toward a parseable failure; pflag gives no way to know the unknown flag's arity.
