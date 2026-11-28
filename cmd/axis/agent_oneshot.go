@@ -100,13 +100,20 @@ type pipedApprovals struct {
 	items []pendingApproval
 }
 
+// add records item once: a model that retries the same denied request
+// every round still counts as one step.
 func (p *pipedApprovals) add(item pendingApproval) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, have := range p.items {
+		if have.Tool == item.Tool && have.Request == item.Request {
+			return
+		}
+	}
 	p.items = append(p.items, item)
-	p.mu.Unlock()
 }
 
 func (p *pipedApprovals) list() []pendingApproval {

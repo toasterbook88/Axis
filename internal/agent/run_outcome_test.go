@@ -117,3 +117,24 @@ func TestLastRunOutcomeScopeRefused(t *testing.T) {
 		t.Fatalf("ScopeRefused carried into the next run: %v", got)
 	}
 }
+
+// The deferred bridge checks the target's scope too, and records it.
+func TestLastRunOutcomeScopeRefusedThroughBridge(t *testing.T) {
+	be := &hookBackend{response: &chat.Message{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{{
+		ID: "b1", Function: chat.ToolCallFunction{
+			Name: "tool_call", Arguments: json.RawMessage(`{"name":"run_shell","arguments":{"command":"ls"}}`),
+		},
+	}}}}
+	// An eager allowlist defers every other observe tool, so the bridge is
+	// callable; the default mode still hides run_shell.
+	a := New(Config{Backend: be, MaxTurns: 1, MaxTokens: 100000, Output: io.Discard, ToolContext: &ToolContext{}, EagerTools: []string{"read_file"}})
+	if !a.tools.Visible("tool_call") {
+		t.Fatal("bridge hidden; the test needs a deferred tool")
+	}
+	if err := a.Run(context.Background(), "list files"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := a.LastRunOutcome().ScopeRefused; !reflect.DeepEqual(got, []string{"run_shell"}) {
+		t.Fatalf("ScopeRefused = %v, want [run_shell]", got)
+	}
+}

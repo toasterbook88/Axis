@@ -41,7 +41,8 @@ how the run ended:
    The fields have their own mutex so they can be read without `runMu`.
 2. `cmd/axis`: `pipedConfirm(w, rec)` keeps its notices and also appends each denial to a
    mutex-guarded `pipedApprovals` recorder: tool, the confirm text clipped to 400 runes, risk
-   score, and `clears`, what lets a rerun through. `clears` follows `autonomyConfirm`
+   score, and `clears`, what lets a rerun through. A repeat of the same tool and request is recorded
+   once. `clears` follows `autonomyConfirm`
    (`internal/agent/autonomy.go`): `auto_approve_tools` for an `mcp_` tool, which asks in every mode
    unless `nodes.yaml` allowlists it; `interactive approval` for consult_model and any score of 75
    or more (a safety rule's ask, or a safety-blocked override at 80 and up), which full autonomy
@@ -74,7 +75,9 @@ how the run ended:
 5. In text mode, non-zero outcomes return an `ExitCodeError` whose message names the cause
    (`agent stopped at the N-turn ceiling without a final answer`, `agent needs input: N step(s)
    need an approval a piped run cannot give`).
-6. `-p` refuses `--max-turns` below 1, which would otherwise report a ceiling with no round run.
+6. `-p` refuses `--max-turns` below 1, which would otherwise report a ceiling with no round run, and
+   `--format json` refuses `--desk-lease`, whose output is the seat's raw reply. Both, like a bad
+   `--autonomy`, are checked after the json document writer is in place.
 7. Docs: `docs/machine-output.md` gains a section with the payload and the table;
    `docs/current-state.md` gains one bullet; the exit-code tables in AGENTS.md §5 and
    `docs/troubleshooting.md` gain 8 and 9; `-p` help lists the codes.

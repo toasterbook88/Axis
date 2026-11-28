@@ -83,7 +83,9 @@ run's outcome, and `ok` is true only for `answered`.
 - A call to a tool the `--autonomy` mode hides (for example `run_shell` in the
   default observe mode) also lands in `pending_approvals`, with `request`
   `hidden by the current --autonomy mode` and `clears` `--autonomy full`.
-- `--max-turns` must be at least 1 with `-p`.
+- A request the model retries is listed once.
+- `--max-turns` must be at least 1 with `-p`, and `--format json` cannot be
+  combined with `--desk-lease`.
 - `usage.estimated` is true when the backend reported no usage; `tokens_in` is
   then the conversation estimate.
 

@@ -109,3 +109,23 @@ func TestAgentCmdPositionalCeilingKeepsExitZero(t *testing.T) {
 		t.Fatalf("backend rounds = %d, want 2\nstderr:\n%s", be.calls, stderr)
 	}
 }
+
+// Flag errors checked before startup still produce the json document.
+func TestAgentCmdJSONFlagErrorsWriteDocument(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-p", "--format", "json", "--autonomy", "bogus", "x"}, "unknown autonomy mode"},
+		{[]string{"-p", "--format", "json", "--desk-lease", "lease.json", "x"}, "--desk-lease cannot be combined"},
+		{[]string{"-p", "--format", "json", "--max-turns", "0", "x"}, "--max-turns must be at least 1"},
+	} {
+		stdout, _, err := runAgentCmd(t, &scriptedBackend{steps: []chat.Message{answer("x")}}, nil, tc.args...)
+		if ExitCode(err) != ExitErrGeneric {
+			t.Fatalf("%v: err = %v", tc.args, err)
+		}
+		if d := decodeAgentDoc(t, stdout).Data; d.ExitCode != ExitErrGeneric || !strings.Contains(d.Error, tc.want) {
+			t.Fatalf("%v: data = %+v", tc.args, d)
+		}
+	}
+}

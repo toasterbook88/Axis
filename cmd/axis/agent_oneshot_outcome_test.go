@@ -351,3 +351,46 @@ func TestPipedRunDeadlineOnLastRoundIsFailed(t *testing.T) {
 		t.Fatalf("data = %+v", d)
 	}
 }
+
+// A failed run reports no final_text, even when an earlier round said
+// something.
+func TestPipedRunFailedJSONClearsFinalText(t *testing.T) {
+	be := &failSecondRound{first: chat.Message{
+		Role: chat.RoleAssistant, Content: "checking first",
+		ToolCalls: []chat.ToolCall{{ID: "c1", Function: chat.ToolCallFunction{Name: "cluster_status", Arguments: json.RawMessage(`{}`)}}},
+	}}
+	r := runPiped(t, be, 3, true, "json")
+	if got := ExitCode(r.err); got != ExitErrCommandFail {
+		t.Fatalf("exit code = %d (%v)", got, r.err)
+	}
+	if d := decodeAgentDoc(t, r.stdout).Data; d.FinalText != "" || d.Outcome != "failed" {
+		t.Fatalf("data = %+v", d)
+	}
+}
+
+type failSecondRound struct {
+	mu    sync.Mutex
+	calls int
+	first chat.Message
+}
+
+func (f *failSecondRound) ChatStream(context.Context, []chat.Message, []chat.ToolDef, io.Writer) (chat.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.calls == 1 {
+		return f.first, nil
+	}
+	return chat.Message{}, errors.New("backend down")
+}
+
+func TestPipedApprovalsDedupeRetries(t *testing.T) {
+	rec := &pipedApprovals{}
+	c := pipedConfirm(io.Discard, rec)
+	c("run_shell", "git push", 75)
+	c("run_shell", "git push", 75)
+	c("run_shell", "git push --force", 75)
+	if got := rec.list(); len(got) != 2 {
+		t.Fatalf("recorded %d, want 2: %+v", len(got), got)
+	}
+}

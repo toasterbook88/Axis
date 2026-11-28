@@ -82,9 +82,6 @@ func agentCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
-				return err
-			}
 			if err := validateOutputFormat(&format, "text", "json")(cmd, args); err != nil {
 				return err
 			}
@@ -102,6 +99,12 @@ func agentCmd() *cobra.Command {
 						writePipedStartupFailure(cmd.OutOrStdout(), retErr, maxTurns)
 					}
 				}()
+			}
+			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
+				return err
+			}
+			if jsonMode && deskLeasePath != "" {
+				return ExitCodeError{Code: ExitErrGeneric, Message: "--desk-lease cannot be combined with --format json"}
 			}
 			if printMode && maxTurns < 1 {
 				return ExitCodeError{Code: ExitErrGeneric, Message: "--max-turns must be at least 1 with -p/--print"}
