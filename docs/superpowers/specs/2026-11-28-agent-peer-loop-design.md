@@ -445,3 +445,31 @@ Questions:
 - Can the ranker pick a snapshot node that `nodes.yaml` does not list, so the child's remote tools cannot reach it? Verified: `runRemote` resolves only `view.Config.Nodes` (`tools_cluster.go:35-39`); f5a7aed restricts ranking to those nodes.
 - Should the error paths carry the receipt? Became D7: every error row starts with the receipt line, pinned in Validation.
 - Is `errors.Is(err, context.Canceled)` enough to classify a cancel? Verified: no, the ceiling path returns nil (`agent.go:462-518`); finding 8's fix replaces that check.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: c9a33e3
+Date: 2026-11-28
+Verdict: revise
+
+1. Major: deferring the six tools turns on the `tool_search`/`tool_call` pair (`tools.go:206-217`, `:269-286`), so eager `Defs()` grows to 8086 bytes and four budget and deferral tests fail. Fixed in 7a39de3: Research states the measured 8086-byte figure and the comparison with eager loading, and Validation lists all four tests as pins to update.
+
+2. Major: an async grandchild lands in its parent child's private store, which nothing reads once that child returns. Fixed in 7a39de3: D6 has a child wait for its own async tasks and fold their receipts and results into its answer, the interactive Claude Code behavior, with a Validation case.
+
+3. Major: D7 depends on `RunOutcome`/`LastRunOutcome`, which exist on no ref. Fixed in 7a39de3: D7 names the unmerged `-p` exit-code change and DEA-31's spec, Review sequencing lands D7 and the receipt's `outcome` field after that change, and the unverified `pending_approvals` claim is removed.
+
+4. Minor: rule 4's receipt read as a build placement the read-only child cannot run. Fixed in 7a39de3: the reason says `placement suggests for <class>` and D4 states the child only reads there.
+
+5. Minor: whole-word matching counted `worker` inside `worker-1`. Fixed in 7a39de3: rule 3 tokenizes on whitespace and punctuation other than `-`, `_` and `.`, with a Validation case.
+
+6. Minor: Problem 5 said children outlive the session, and the printed cancel line was untested. Fixed in 7a39de3: Problem 5 says dropped silently at exit, and Validation adds cmd/axis tests for the line on both surfaces.
+
+7. Minor: `docs/decisions/agent-model-consult.md:13` goes stale under D1. Fixed in 7a39de3: added to the docs list.
+
+Questions:
+
+- Is the child's read of the root scope race-free against `SetAutonomy`? Became D2: the read is under the root's `dispatchMu`, with a `-race` case in Validation.
+- Should a child's scope line tell its parent rather than the operator to elevate? Became D3: a child reports the mode it needs in its answer.
+- Should `spawn_subagent`'s description and `target_node` text change? Became D3: rewritten in the same PR.
