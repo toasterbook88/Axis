@@ -47,11 +47,14 @@ func (r *Registry) ConnectAll(ctx context.Context, cfg *config.Config) {
 		go func(n string, sc config.MCPServerConfig) {
 			defer wg.Done()
 			var conn *ServerConnection
-			var err error
-			switch strings.ToLower(sc.Transport) {
-			case "stdio":
+			err := config.ValidateMCPServer(n, sc)
+			switch {
+			case err != nil:
+				// Invalid auth/TLS fields disable this server only; Load no
+				// longer rejects them for every command.
+			case strings.EqualFold(sc.Transport, "stdio"):
 				conn, err = connectStdio(ctx, n, sc)
-			case "http":
+			case strings.EqualFold(sc.Transport, "http"):
 				conn, err = connectHTTP(ctx, n, sc)
 			default:
 				conn = &ServerConnection{

@@ -730,6 +730,33 @@ func TestDoctorProbesHTTPMCPServer(t *testing.T) {
 	}
 }
 
+func TestDoctorInvalidMCPEntryFailsWithoutProbing(t *testing.T) {
+	defer minimalDoctorStubs(t)()
+	defer stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{{Name: "n", Hostname: "127.0.0.1", SSHUser: "operator"}},
+			MCPServers: map[string]config.MCPServerConfig{
+				"bad": {Transport: "http", URL: "https://mcp.example.com/mcp", TLSCertFingerprint: "not-hex"},
+			},
+		}, nil
+	})()
+	previous := doctorProbeHTTP
+	doctorProbeHTTP = func(context.Context, config.MCPServerConfig, []string) (int, error) {
+		t.Fatal("invalid MCP config must not reach the HTTP probe")
+		return 0, nil
+	}
+	t.Cleanup(func() { doctorProbeHTTP = previous })
+	stdout, _, err := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		return cmd.Execute()
+	})
+	if ExitCode(err) != ExitErrCommandFail || !strings.Contains(stripANSI(stdout), `MCP Server "bad" Config`) ||
+		!strings.Contains(stripANSI(stdout), "tls_cert_fingerprint") {
+		t.Fatalf("invalid MCP entry did not produce a failed config check: error=%v", err)
+	}
+}
+
 func TestDoctorWarnsDisallowedInternalHTTPMCPServer(t *testing.T) {
 	netutil.ResetInternalAllowlist()
 	t.Cleanup(netutil.ResetInternalAllowlist)

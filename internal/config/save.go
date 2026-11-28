@@ -32,6 +32,9 @@ func SaveAtomic(path string, cfg *Config) (SaveResult, error) {
 	if err := cfg.Validate(); err != nil {
 		return SaveResult{}, err
 	}
+	if err := cfg.ValidateMCPServers(); err != nil {
+		return SaveResult{}, err
+	}
 
 	dir := filepath.Dir(path)
 	if err := persist.EnsurePrivateDir(dir); err != nil {

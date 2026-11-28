@@ -1,6 +1,33 @@
 # `mcpclient` TLS certificate pinning, secret header resolution, and Streamable HTTP `axis mcp serve`
 
-Date: 2026-11-22. Status: implemented on `feat/mcpclient-tls-pin-and-http-serve`; spec review and both independent diff reviews `approve-with-changes`, all findings resolved below.
+Date: 2026-11-22. Status: original feature implemented on `feat/mcpclient-tls-pin-and-http-serve`; follow-up review results and resolutions are recorded below.
+
+## Follow-up scope (2026-11-28, PR #686)
+
+The original design and its recorded reviews remain historical. This follow-up restores
+doctor interoperability and release-preparation checks, and amends config-load behavior:
+
+- Doctor resolves the same `${VAR}` headers and bearer references as the MCP client and
+  uses the same leaf pin through `mcpclient.PinnedTLSConfig`. Its guarded transport keeps
+  proxy use disabled, dial-time address policy and same-origin redirect checks. Its probe
+  seam now accepts `MCPServerConfig`. Acceptance: pinned self-signed auth succeeds, wrong
+  pins and unset credentials fail, and existing DNS/redirect/address-policy tests pass.
+- The per-server validation amendment in section 1 makes ordinary config reads tolerant
+  while rejecting invalid entries before connection. `SaveAtomic` stays strict. The init
+  wizard checks these entries before offering edit/reset paths and requires explicit
+  replacement consent. Acceptance: invalid entries never connect, general loads succeed,
+  invalid saves fail and declining replacement leaves the original file unchanged.
+- The release-claims guard counts an untagged `buildinfo.Version` as a pending release
+  when tags exist, catching two-release README drift in the prep PR. A tag-less checkout
+  still skips, and explicit test fixtures remain deterministic. Acceptance: the regression
+  suite rejects the v0.27.1 README against v0.28.0 plus pending v0.29.0, accepts one-release
+  lag and preserves the no-tags skip. This is an independent release-gate bug fix, not a
+  new MCP feature; documenting it here accounts for the complete follow-up diff.
+- The pinned-host test dials its fake endpoint directly regardless of `HTTPS_PROXY`.
+  Production proxy behavior is unchanged.
+
+These bug fixes add no command, config key or wire field. The config-load amendment
+changes documented behavior and requires its own spec and diff review before integration.
 
 ## Problem
 
@@ -15,7 +42,8 @@ Three gaps block `axis` from interoperating securely over Streamable HTTP with l
 - No UDP multicast discovery, Bonjour/mDNS browsing, device pairing flows, or new top-level `axis app` CLI command. Those require a separate wire-protocol spec and public-boundary review.
 - No mounting `/mcp` onto `axis serve` (`:42425`); `axis mcp serve --transport http` runs as its own explicit command on a separate default loopback port (`127.0.0.1:42426`).
 - No TLS termination flags (`--tls-cert`/`--tls-key`) on `axis mcp serve --transport http`; operators placing a TLS reverse proxy in front of loopback must rewrite the forwarded `Host` header to `localhost` or `127.0.0.1` because `mcp-go`'s default loopback DNS-rebinding check remains enabled.
-- No changes to `axis doctor`'s `doctorProbeHTTP` signature or probe behavior in this change (separate follow-up if needed).
+- The original change did not alter `axis doctor`; PR #686's reviewed follow-up scope above
+  supersedes this exclusion for the authentication/TLS probe only.
 - No change to `axis agent`'s external MCP approval contract: `internal/agent/tools_mcp.go` already enforces exact `auto_approve_tools` matching and ignores server-supplied tool annotations; this change only adds a regression test pinning that behavior for read-only vs write tools.
 - No writes to `~/.axis/nodes.yaml` or `~/.axis/ai.yaml`.
 
@@ -44,7 +72,9 @@ Add `ParseTLSCertFingerprint(raw string) ([32]byte, error)` in `internal/config`
 - Accepts either 64 contiguous hex characters or colon-separated hex pairs/groups with no leading, trailing, or consecutive colons (`::`).
 - Decodes to `[32]byte` via `encoding/hex`; rejects any other length or non-hex character.
 
-Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-name order:
+`config.ValidateMCPServer` checks one entry. `Config.ValidateMCPServers()` checks
+`c.MCPServers` in deterministic sorted-name order. Ordinary Parse/Load calls the core
+`Config.Validate()` and tolerates invalid MCP entries so unrelated commands keep working:
 - If `TLSCertFingerprint != ""`:
   - `ParseTLSCertFingerprint` must succeed.
   - `Transport` must be `"http"` (case-insensitive).
@@ -55,7 +85,27 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - `Transport` must be `"http"` (case-insensitive).
   - `Headers` must not also contain an `Authorization` header (case-insensitive) to avoid ambiguous credentials.
 
+Amendment (2026-11-27; reviewed with changes on 2026-11-28): these checks move out of `Config.Validate()` into
+`config.ValidateMCPServer` / `Config.ValidateMCPServers`. Run inside `Validate`, one bad entry failed
+`config.Load` for every command, the daemon included. Now `Registry.ConnectAll` runs the check per
+server and records the error on that server only (it never connects), `axis doctor` reports it as
+`fail`, and `SaveAtomic` still rejects it. The init wizard invokes `ValidateMCPServers`
+before offering edit/reset paths and routes an invalid entry to the explicit replacement
+prompt. Accepting replacement intentionally creates a fresh configuration without the
+old optional sections, preserving the existing replacement contract and backup; declining
+leaves the original bytes unchanged. Preserving valid optional sections during replacement
+would be a separate behavior change. The rejected alternatives are recorded below.
+
 ### 2. Pinned TLS and secret header resolution (`internal/mcpclient/connection.go`)
+
+- **`PinnedTLSConfig(cfg) (*tls.Config, error)`:** exposes the same pin configuration
+  used by `NewHTTPClient` for doctor, returning nil without a configured pin. Doctor
+  validates the entry first, then uses `ResolveHeaders` and this pin inside its existing
+  guarded, proxy-less transport. Resolution or pin/probe errors are warnings; invalid
+  configuration is a failed check before probing. An SSE response is closed after its
+  headers are checked, without draining the open stream. Finite bodies keep the existing
+  bounded drain. This avoids spending the five-second probe budget on each authenticated
+  Streamable HTTP server.
 
 - **`NewHTTPClient(cfg config.MCPServerConfig) (*http.Client, error)`:**
   - Keeps the existing same-origin redirect policy (`maxMCPRedirects = 10`, same scheme and host).
@@ -100,7 +150,15 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
 
 - `internal/config/mcp_config_test.go`:
   - `ParseTLSCertFingerprint`: valid bare hex, uppercase/colon-separated, `sha256:` prefix; rejects wrong length, non-hex, leading/trailing/double colons, empty.
-  - `Config.Validate`: rejects invalid fingerprint, fingerprint on `http://` or `stdio`, invalid `bearer_token_env` name, `bearer_token_env`/`bearer_token_file` on `stdio`, and conflicting `Authorization` header with `bearer_token_env`.
+  - Parse/Load tolerates invalid MCP entries; `ValidateMCPServers` rejects invalid fingerprint, fingerprint on `http://` or `stdio`, invalid `bearer_token_env` name, `bearer_token_env`/`bearer_token_file` on `stdio`, and conflicting `Authorization` header with `bearer_token_env`. `SaveAtomic` rejects them before writing.
+- `internal/mcpclient/registry_test.go`: a stdio entry with HTTP-only auth fields and
+  a nonexistent command fails with the configuration error, proving process startup
+  is never attempted; an HTTP-only guard cannot satisfy this test accidentally.
+- Doctor and init follow-up tests: invalid MCP config produces a failed named check,
+  command failure and no HTTP probe; pinned authentication succeeds while wrong pins and
+  missing tokens fail; an authenticated, flushed SSE response returns before the context
+  deadline even while its body stays open. The init replacement prompt requires explicit
+  consent and declining preserves the original file.
 - `internal/mcpclient/connection_test.go`:
   - Self-signed `httptest.NewTLSServer` fails without pin, succeeds with matching `tls_cert_fingerprint` (including colon-separated / `sha256:` formats), and fails with wrong pin.
   - Rejects `tls_cert_fingerprint` on `http://` URL.
@@ -117,6 +175,14 @@ Extend `Config.Validate()` to validate `c.MCPServers` in deterministic sorted-na
   - Regression test verifying read-only tools in `auto_approve_tools` auto-approve while unlisted `propose_library_item` requires confirmation even when the server sets `ReadOnlyHint: true`.
 
 ## Alternatives
+
+- **Keep MCP auth/TLS validation in `Config.Validate`.** Rejected: one optional invalid
+  server would still prevent every ordinary command and daemon refresh from loading the
+  core config. Shared per-entry validation preserves fail-closed connection and save paths.
+- **Store per-entry errors or drop entries during Load.** Not selected: adding another
+  configuration error representation or silently removing repairable entries expands the
+  change. Keep entries intact, centralize their validator, and require every connection
+  or probe consumer to call it. Regression tests pin those consumer boundaries.
 
 - **Custom CA bundle (`tls_ca_file`) instead of leaf fingerprint pinning.** Useful for private PKIs, but local app servers typically generate a single self-signed leaf certificate without exporting a separate CA chain; leaf SHA-256 pinning requires one string in YAML and zero extra files. A future `tls_ca_file` field remains additive.
 - **Boolean `tls_insecure_skip_verify: true`.** Rejected: disables authenticity checks completely and exposes bearer tokens to active MITM.
@@ -179,3 +245,64 @@ Verdict: approve-with-changes
 3. Minor: `ServeStreamableHTTP` happy path was uncovered and spec §3/§4 references drifted from `internal/mcp/http.go` and test wiring. Fixed in b97c3eff: added `TestServeStreamableHTTPLoopbackWithTokenEnvAndCancel` and `TestStreamableHTTPConnectViaAxisMCPClientPinnedTLS` and updated spec §3/§4 to match.
 
 Note: two independent diff reviews were run per AGENTS.md §8 step 4 (changes span 4 packages: `internal/config`, `internal/mcpclient`, `internal/mcp`, `cmd/axis`).
+
+Kind: spec
+Reviewer: fresh-context Claude reviewer, given only docs/superpowers/review-prompt.md and its five inputs
+Model: Anthropic Claude (claude-opus-5-5)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: 2bb14d0a5c06e0038425b4a0f8d65f9f10d41b7d
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Minor: the amendment was not carried into the tests, status, or alternatives, and the init change was omitted. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: the test plan names ValidateMCPServers, SaveAtomic, the init replace prompt, and the stdio startup boundary. Alternatives records the rejected Load behavior. The init contract says accepting replacement builds a fresh configuration without the old optional sections.
+
+2. Minor: tests stayed green when the doctor fail check or ConnectAll stdio ordering broke. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: TestDoctorInvalidMCPEntryFailsWithoutProbing requires a failed named check and no HTTP probe, and TestConnectAllRejectsInvalidStdioBeforeStarting uses HTTP-only auth fields with a nonexistent command.
+
+3. Minor: the doctor probe signature and behavior changed despite the old non-goal. Fixed in 31babc3ab2a7316c406ad2244f467255fd6dd005 for the follow-up scope, and in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb for the design text: doctor resolves the same headers and bearer references as the client and uses PinnedTLSConfig, and the old doctor exclusion is limited to that reviewed probe.
+
+4. Minor: an authenticated Streamable HTTP probe drained the body until the five-second timeout. Fixed in d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb: probeDoctorHTTPEndpoint closes a text/event-stream body without draining it, and TestDoctorMCPProbeDoesNotDrainSSE covers the plain and charset variants.
+
+5. Minor: an unrelated release-claims gate change rode on the diff with no spec text. Fixed in 31babc3ab2a7316c406ad2244f467255fd6dd005: the follow-up scope records it as an independent release-gate bug fix, including the pending-version count and the no-tags skip.
+
+Questions:
+
+- For an invalid entry, does accepting init replacement drop the other optional sections? verified: the init contract keeps the existing fresh-configuration behavior. Accepting replacement omits the old optional sections and keeps the backup. Declining leaves the original file unchanged.
+
+- Should Load record per-entry errors or drop invalid entries so a later consumer cannot skip the check? verified: Alternatives rejects that larger change. Entries stay intact, and every connection or probe consumer must call the shared validator.
+
+- Commit 31babc3a landed during this review and was outside its inputs. Did it resolve the doctor non-goal and the release-claims scope? verified: this spec review was not repeated at that commit. Its follow-up scope text is in 31babc3ab2a7316c406ad2244f467255fd6dd005, and both diff reviews below approve d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb.
+
+Note: the reviewer reported 72 turns and a completed verdict. During the review the worktree moved to 31babc3ab2a7316c406ad2244f467255fd6dd005. That commit is outside this block's Head. The code fixes above are in the later diff-reviewed head.
+
+Kind: diff
+Reviewer: fresh-context Codex reviewer A
+Model: OpenAI GPT
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb
+Date: 2026-11-28
+Verdict: approve
+
+Questions:
+
+- Follow-up review records still need appending to the spec. This review does not establish that recordkeeping step. verified: this block and the two blocks around it are that append.
+
+Note: isolated clone /tmp/pr686-rereview-39cmKJ. Focused config, MCP client, and doctor/init tests passed.
+  Authenticated SSE plain and charset variants returned in 204.532us and 205.367us.
+  Replacing doctor.go with the preceding head made both new SSE regressions fail after their two-second deadlines. Restoring the corrected file passed in 2.116267ms and 514.946us, and the clone was clean.
+  Retained network-guard tests, the spec gate (25 specs, 3 grandfathered), import tiers, and whitespace passed.
+  This review had no code findings.
+
+Kind: diff
+Reviewer: independent fresh-context Codex reviewer B
+Model: OpenAI GPT
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: d91c484cdb08a65d9b76e1ef1338bbbb2cd745fb
+Date: 2026-11-28
+Verdict: approve
+
+Note: isolated clone /tmp/pr686-second-review.qGuqVm. The full diff and amended spec were reviewed.
+  Full affected suites internal/config, internal/mcpclient, and cmd/axis passed with a hermetic HOME.
+  The release-claims regression suite passed.
+  Public-boundary, spec (25 specs, 3 grandfathered), import tiers, doc-facts, and repo-truth gates passed.
+  Complete diff whitespace and isolated-checkout cleanliness passed.
+  This review had no findings and no questions.

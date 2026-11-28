@@ -228,6 +228,24 @@ run_guard 0
 grep -qF 'no release tags available; skipping' "$test_root/out" \
   || fail 'an empty tag list must skip with a notice, not pass silently'
 
+# --- pending release ---------------------------------------------------------
+# The v0.29.0 case: buildinfo.Version is bumped to the next release before the
+# tag exists, and README still names the release two back. The release-prep PR
+# must fail here, not the tag push after it.
+write_tags v0.27.1 v0.28.0
+write_commits "v0.27.1 $C250" "v0.28.0 $C251"
+write_readme v0.27.1 v0.27.1 8578cb2a v0.27.x
+write_security v0.27.x
+AXIS_RELEASE_CLAIMS_PENDING=v0.29.0 run_guard 1
+expect_failure_mentioning "the newest release (v0.29.0) or the one before it (v0.28.0)"
+# Without the bump the same tree is one release behind and passes.
+AXIS_RELEASE_CLAIMS_PENDING=v0.28.0 run_guard 0
+# A checkout with no tags still skips: the pending version alone is no history.
+: >"$tags_file"
+AXIS_RELEASE_CLAIMS_PENDING=v0.29.0 run_guard 0
+grep -qF 'no release tags available; skipping' "$test_root/out" \
+  || fail 'a pending version must not turn a tag-less checkout into a failure'
+
 # --- missing claims ----------------------------------------------------------
 write_tags v0.25.0
 write_commits "v0.25.0 $C250"

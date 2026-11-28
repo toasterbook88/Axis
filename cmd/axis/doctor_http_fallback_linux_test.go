@@ -61,7 +61,7 @@ func TestDoctorHTTPPreservesAddressFallback(t *testing.T) {
 	resp.Body.Close()
 	t.Logf("normal transport fallback succeeded in %v", time.Since(start))
 	start = time.Now()
-	status, err := probeDoctorHTTPEndpoint(context.Background(), endpoint, nil, []string{"localhost"})
+	status, err := probeDoctorHTTPEndpoint(context.Background(), endpoint, nil, []string{"localhost"}, nil)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("reachable second address not used: elapsed=%v status=%d err=%v", time.Since(start), status, err)
 	}

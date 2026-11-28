@@ -2,6 +2,7 @@ package mcpclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -201,5 +202,34 @@ func TestConnectAllUnsupportedTransport(t *testing.T) {
 	}
 	if sc.Err == nil {
 		t.Fatal("expected error for unsupported transport")
+	}
+}
+
+func TestConnectAllIsolatesInvalidServerConfig(t *testing.T) {
+	r := NewRegistry()
+	r.ConnectAll(context.Background(), &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"bad": {
+			Transport:          "http",
+			URL:                "https://mcp.example.com/mcp",
+			TLSCertFingerprint: "not-hex",
+		},
+	}})
+	conn := r.Get("bad")
+	if conn == nil || conn.Err == nil || !strings.Contains(conn.Err.Error(), "tls_cert_fingerprint") {
+		t.Fatalf("bad entry: conn=%+v, want a per-server tls_cert_fingerprint error", conn)
+	}
+}
+
+func TestConnectAllRejectsInvalidStdioBeforeStarting(t *testing.T) {
+	r := NewRegistry()
+	r.ConnectAll(context.Background(), &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"bad-stdio": {
+			Transport: "stdio", Command: []string{"/nonexistent-example-command"},
+			BearerTokenEnv: "EXAMPLE_TOKEN",
+		},
+	}})
+	conn := r.Get("bad-stdio")
+	if conn == nil || conn.Err == nil || !strings.Contains(conn.Err.Error(), "requires http transport") {
+		t.Fatal("invalid stdio entry must fail config validation before process startup")
 	}
 }

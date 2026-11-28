@@ -37,6 +37,14 @@
 #   AXIS_RELEASE_CLAIMS_TAGS_FILE     default `git tag --list 'v*'`
 #   AXIS_RELEASE_CLAIMS_COMMITS_FILE  "<tag> <full-sha>" lines; default: `git
 #                                     rev-parse <tag>^{commit}` per tag
+#   AXIS_RELEASE_CLAIMS_PENDING       pending release version (vX.Y.Z); default
+#                                     v + buildinfo.Version, unset when
+#                                     AXIS_RELEASE_CLAIMS_TAGS_FILE is set
+#
+# Pending release. buildinfo.Version is bumped in the release-prep PR before
+# the tag exists. Counting it as the newest release makes that PR fail on the
+# same drift the tag run would find. Before this, the gate first failed on the
+# tag push itself, and the only way out was to move a published tag (v0.29.0).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -61,6 +69,17 @@ release_tags="$(
     fi
   } | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true
 )"
+
+if [[ -n "${AXIS_RELEASE_CLAIMS_PENDING+set}" ]]; then
+  pending="$AXIS_RELEASE_CLAIMS_PENDING"
+elif [[ -n "${AXIS_RELEASE_CLAIMS_TAGS_FILE:-}" ]]; then
+  pending=""
+else
+  pending="v$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/buildinfo/version.go | head -1)"
+fi
+if [[ -n "$release_tags" && "$pending" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! printf '%s\n' "$release_tags" | grep -qxF "$pending"; then
+  release_tags="$(printf '%s\n%s\n' "$release_tags" "$pending" | grep -v '^$' | sort -V)"
+fi
 
 if [[ -z "$release_tags" ]]; then
   printf 'verify-release-claims: no release tags available; skipping release-claim freshness check\n'

@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -196,13 +197,37 @@ mcp_servers:
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Parse([]byte(baseYAML + tc.snippet))
+			cfg, err := Parse([]byte(baseYAML + tc.snippet))
+			if err != nil {
+				t.Fatalf("Parse rejected the whole config for one bad mcp_servers entry: %v", err)
+			}
+			err = cfg.ValidateMCPServers()
 			if err == nil {
-				t.Fatalf("Parse succeeded, want error containing %q", tc.wantErr)
+				t.Fatalf("ValidateMCPServers succeeded, want error containing %q", tc.wantErr)
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestSaveAtomicRejectsInvalidMCPServer(t *testing.T) {
+	cfg, err := Parse([]byte(`nodes:
+  - name: node-a
+    hostname: node-a.example.com
+    ssh_user: ops
+mcp_servers:
+  bad:
+    transport: http
+    url: "https://mcp.example.com/mcp"
+    tls_cert_fingerprint: "not-hex"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	if _, err := SaveAtomic(path, cfg); err == nil || !strings.Contains(err.Error(), "tls_cert_fingerprint") {
+		t.Fatalf("SaveAtomic err = %v, want tls_cert_fingerprint error", err)
 	}
 }

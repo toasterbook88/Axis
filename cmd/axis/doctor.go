@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +23,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/facts"
+	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -76,14 +79,32 @@ var doctorProbeOllama = func(ctx context.Context) doctorBackendStatus {
 	return runBackendProbeScript(ctx, facts.OllamaDiscoveryScript)
 }
 
-var doctorProbeHTTP = probeDoctorHTTPEndpoint
+var doctorProbeHTTP = probeDoctorMCPEndpoint
+
+// probeDoctorMCPEndpoint probes an http MCP server with the headers and TLS pin
+// the MCP client would use: ${VAR} header expansion, bearer_token_env/file, and
+// tls_cert_fingerprint. Probing with the raw config reported 401s and x509
+// errors for servers the client reaches fine.
+func probeDoctorMCPEndpoint(ctx context.Context, mcpCfg config.MCPServerConfig, allowedHosts []string) (int, error) {
+	headers, err := mcpclient.ResolveHeaders(mcpCfg)
+	if err != nil {
+		return 0, fmt.Errorf("resolve headers: %w", err)
+	}
+	tlsCfg, err := mcpclient.PinnedTLSConfig(mcpCfg)
+	if err != nil {
+		return 0, err
+	}
+	return probeDoctorHTTPEndpoint(ctx, mcpCfg.URL, headers, allowedHosts, tlsCfg)
+}
 
 const (
 	maxDoctorHTTPRedirects = 10
 	doctorHTTPProbeTimeout = 5 * time.Second
 )
 
-func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string) (int, error) {
+// probeDoctorHTTPEndpoint probes rawURL through the guarded doctor transport.
+// A nil tlsCfg keeps the default system-root verification.
+func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string, tlsCfg *tls.Config) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, doctorHTTPProbeTimeout)
 	defer cancel()
 	parsed, err := url.Parse(rawURL)
@@ -104,6 +125,9 @@ func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[str
 	// Probe directly: a proxy could resolve the destination independently and
 	// bypass the dial-time address policy. Keep the URL intact for Host and TLS.
 	transport.Proxy = nil
+	if tlsCfg != nil {
+		transport.TLSClientConfig = tlsCfg
+	}
 	//lint:ignore SA1019 Clear the legacy hook so TLS cannot bypass guarded DialContext.
 	transport.DialTLS = nil
 	transport.DialTLSContext = nil
@@ -142,7 +166,12 @@ func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[str
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	// A successful Streamable HTTP GET may stay open indefinitely. The
+	// response headers already prove routing/authentication; do not drain SSE.
+	if mediaType != "text/event-stream" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	}
 
 	// Streamable HTTP MCP endpoints commonly return 405/406/400 on a bare GET,
 	// which still proves DNS, TLS, and listener routing succeeded.
@@ -372,6 +401,15 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		sort.Strings(mcpNames)
 		for _, name := range mcpNames {
 			mcpCfg := cfg.MCPServers[name]
+			if err := config.ValidateMCPServer(name, mcpCfg); err != nil {
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("MCP Server %q Config", name),
+					Status:  "fail",
+					Message: err.Error(),
+					Fix:     "fix the mcp_servers entry in nodes.yaml; the MCP client will not connect to it",
+				})
+				continue
+			}
 			switch strings.ToLower(mcpCfg.Transport) {
 			case "stdio":
 				if len(mcpCfg.Command) == 0 {
@@ -413,14 +451,14 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 					})
 				} else {
 					httpCtx, httpCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
-					status, probeErr := doctorProbeHTTP(httpCtx, mcpCfg.URL, mcpCfg.Headers, cfg.AllowedInternalHosts)
+					status, probeErr := doctorProbeHTTP(httpCtx, mcpCfg, cfg.AllowedInternalHosts)
 					httpCancel()
 					if probeErr != nil {
 						checks = append(checks, DoctorCheck{
 							Name:    fmt.Sprintf("MCP Server %q URL", name),
 							Status:  "warn",
 							Message: fmt.Sprintf("%s (%v)", mcpCfg.URL, probeErr),
-							Fix:     "verify URL reachability, DNS/Tailscale routing, auth headers, and nodes.yaml allowed_internal_hosts",
+							Fix:     "verify URL reachability, DNS/Tailscale routing, auth headers or bearer token, tls_cert_fingerprint, and nodes.yaml allowed_internal_hosts",
 						})
 					} else {
 						checks = append(checks, DoctorCheck{
