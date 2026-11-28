@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -82,6 +84,40 @@ func (o *pipedToolObserver) MaxTurnsReached(max int) {
 	fmt.Fprintf(o.w, "stopped at the %d-turn ceiling\n", max)
 }
 
+// pendingApproval is one confirm a piped run denied because nobody could
+// answer it. The run reports these as its needs_input outcome.
+type pendingApproval struct {
+	Tool      string `json:"tool"`
+	Request   string `json:"request"`
+	RiskScore int    `json:"risk_score"`
+	Clears    string `json:"clears"` // what would let a rerun proceed
+}
+
+// pipedApprovals collects the confirms a -p run denied. Confirms can arrive
+// from concurrent tool dispatch, so it locks.
+type pipedApprovals struct {
+	mu    sync.Mutex
+	items []pendingApproval
+}
+
+func (p *pipedApprovals) add(item pendingApproval) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.items = append(p.items, item)
+	p.mu.Unlock()
+}
+
+func (p *pipedApprovals) list() []pendingApproval {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]pendingApproval(nil), p.items...)
+}
+
 // pipedConfirm is the fail-closed confirm for -p runs: a piped invocation
 // cannot answer an interactive prompt, so everything reaching the confirm
 // layer is denied with a notice pointing at the flags that suppress the
@@ -89,17 +125,24 @@ func (o *pipedToolObserver) MaxTurnsReached(max int) {
 // this base in the agent's confirm chain, so safe commands under
 // --auto-approve never reach it. A specific safety rule's ask (score 75 to
 // 79) reaches it even under --autonomy full, so its notice says so instead.
-func pipedConfirm(w io.Writer) agent.ConfirmFunc {
+//
+// Each denial is also recorded in rec (nil records nothing) so the run can
+// report needs_input.
+func pipedConfirm(w io.Writer, rec *pipedApprovals) agent.ConfirmFunc {
 	return func(tool, desc string, score int) agent.ConfirmResult {
-		if score >= safety.ScoreAskAlways && score < 80 {
+		item := pendingApproval{Tool: tool, Request: clipLine(desc, 400), RiskScore: score}
+		switch {
+		case score >= safety.ScoreAskAlways && score < 80:
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and a specific safety rule flagged it (run interactively to approve)\n", tool)
-			return agent.ConfirmNo
-		}
-		if tool == "consult_model" {
+			item.Clears = "interactive approval"
+		case tool == "consult_model":
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session (consult_model still asks under --autonomy full and --auto-approve; run interactively)\n", tool)
-			return agent.ConfirmNo
+			item.Clears = "interactive approval"
+		default:
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
+			item.Clears = "--autonomy full"
 		}
-		fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
+		rec.add(item)
 		return agent.ConfirmNo
 	}
 }
@@ -123,35 +166,149 @@ func legacyOneShotBanner(w io.Writer, model string, maxTurns int) {
 // confirmForPipedMode returns the fail-closed confirm for -p runs and nil
 // otherwise (nil keeps the agent's StdinConfirm default for interactive and
 // positional use).
-func confirmForPipedMode(printMode bool, errW io.Writer) agent.ConfirmFunc {
+func confirmForPipedMode(printMode bool, errW io.Writer, rec *pipedApprovals) agent.ConfirmFunc {
 	if !printMode {
 		return nil
 	}
-	return pipedConfirm(errW)
+	return pipedConfirm(errW, rec)
+}
+
+// Outcomes of a -p run. They are the "status" of the --format json document
+// and each maps to its own exit code (classifyPipedRun).
+const (
+	pipedOutcomeAnswered    = "answered"
+	pipedOutcomeTurnCeiling = "turn_ceiling"
+	pipedOutcomeNeedsInput  = "needs_input"
+	pipedOutcomeFailed      = "failed"
+)
+
+// classifyPipedRun turns how a -p run ended into its outcome and exit code.
+// An error wins. Then a denied approval: the run could not do part of what
+// was asked, and a rerun with approval may finish it, whether or not the
+// model went on to answer or ran out of turns. Then the turn ceiling.
+func classifyPipedRun(runErr error, stop agent.RunStop, pending int) (string, int) {
+	switch {
+	case runErr != nil || stop == agent.RunStopFailed:
+		return pipedOutcomeFailed, ExitErrCommandFail
+	case pending > 0:
+		return pipedOutcomeNeedsInput, ExitAgentNeedsInput
+	case stop == agent.RunStopTurnCeiling:
+		return pipedOutcomeTurnCeiling, ExitAgentTurnCeiling
+	default:
+		return pipedOutcomeAnswered, ExitOK
+	}
+}
+
+// pipedRunResult is the data payload of `axis agent -p --format json`.
+type pipedRunResult struct {
+	Outcome          string            `json:"outcome"`
+	ExitCode         int               `json:"exit_code"`
+	Turns            int               `json:"turns"`
+	MaxTurns         int               `json:"max_turns"`
+	FinalText        string            `json:"final_text"`
+	PendingApprovals []pendingApproval `json:"pending_approvals"`
+	Error            string            `json:"error,omitempty"`
+	Usage            pipedRunUsage     `json:"usage"`
+	ElapsedMS        int64             `json:"elapsed_ms"`
+}
+
+type pipedRunUsage struct {
+	TokensIn  int  `json:"tokens_in"`
+	TokensOut int  `json:"tokens_out"`
+	Estimated bool `json:"estimated"`
+}
+
+// lastAssistantText returns the content of the newest assistant message. At
+// the turn ceiling that is whatever the model said alongside its last tool
+// calls, often empty.
+func lastAssistantText(a *agent.Agent) string {
+	msgs := a.Conversation().Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == chat.RoleAssistant {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+// pipedRunOptions carries what runOneShotPiped needs beyond the agent.
+type pipedRunOptions struct {
+	Out         io.Writer // stdout: the --format json document
+	ErrW        io.Writer
+	Timeout     time.Duration
+	HistoryPath string
+	Format      string // "text" (default) or "json"
+	Approvals   *pipedApprovals
 }
 
 // runOneShotPiped runs one instruction with the piped output contract:
 // assistant text on stdout (streamed through the agent's ColorWriter as
 // usual), tool badges and the session summary on stderr, no session banner.
 // The confirm layer is fail-closed (pipedConfirm) so a piped run never
-// blocks on an interactive prompt.
-func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, errW io.Writer, timeout time.Duration, historyPath string) error {
-	ctx2, cancel := agentRequestContext(ctx, timeout)
+// blocks on an interactive prompt. With --format json the caller has sent
+// the stream to io.Discard, and stdout carries one axis.output/v1 document.
+//
+// Exit codes: 0 answered, 8 turn ceiling, 9 needs input, 4 failed.
+func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, opts pipedRunOptions) error {
+	errW := opts.ErrW
+	ctx2, cancel := agentRequestContext(ctx, opts.Timeout)
 	defer cancel()
 	start := time.Now()
-	if err := a.Run(ctx2, instruction); err != nil {
-		fmt.Fprintf(errW, "error: Agent failed: %v\n", err)
-		return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
+	runErr := a.Run(ctx2, instruction)
+	if runErr != nil {
+		fmt.Fprintf(errW, "error: Agent failed: %v\n", runErr)
 	}
-	if usageIn, usageOut, usageTurns := a.UsageStats(); usageTurns > 0 {
-		fmt.Fprintf(errW, "── %d tokens in · %d out (real, %d turns) · %s elapsed ──\n",
-			usageIn, usageOut, usageTurns, time.Since(start).Round(time.Second))
-	} else {
-		fmt.Fprintf(errW, "── ~%d tokens (estimate) · %s elapsed ──\n",
-			a.ContextTokens(), time.Since(start).Round(time.Second))
+	ro := a.LastRunOutcome()
+	pending := opts.Approvals.list()
+	outcome, code := classifyPipedRun(runErr, ro.Stop, len(pending))
+
+	usageIn, usageOut, usageTurns := a.UsageStats()
+	if runErr == nil {
+		if usageTurns > 0 {
+			fmt.Fprintf(errW, "── %d tokens in · %d out (real, %d turns) · %s elapsed ──\n",
+				usageIn, usageOut, usageTurns, time.Since(start).Round(time.Second))
+		} else {
+			fmt.Fprintf(errW, "── ~%d tokens (estimate) · %s elapsed ──\n",
+				a.ContextTokens(), time.Since(start).Round(time.Second))
+		}
+		if opts.HistoryPath != "" {
+			_ = saveAgentConversation(a.Conversation(), opts.HistoryPath, errW)
+		}
 	}
-	if historyPath != "" {
-		_ = saveAgentConversation(a.Conversation(), historyPath, errW)
+
+	if opts.Format == "json" {
+		res := pipedRunResult{
+			Outcome:          outcome,
+			ExitCode:         code,
+			Turns:            ro.Turns,
+			MaxTurns:         ro.MaxTurns,
+			FinalText:        lastAssistantText(a),
+			PendingApprovals: pending,
+			Usage:            pipedRunUsage{TokensIn: usageIn, TokensOut: usageOut},
+			ElapsedMS:        time.Since(start).Milliseconds(),
+		}
+		if res.PendingApprovals == nil {
+			res.PendingApprovals = []pendingApproval{}
+		}
+		if usageTurns == 0 {
+			res.Usage = pipedRunUsage{TokensIn: a.ContextTokens(), Estimated: true}
+		}
+		if runErr != nil {
+			res.Error = runErr.Error()
+			res.FinalText = ""
+		}
+		if err := writeMachineOutput(opts.Out, "agent", outcome, code == ExitOK, res, nil); err != nil {
+			return ExitCodeError{Code: ExitErrIO, Message: fmt.Sprintf("write agent result: %v", err)}
+		}
+	}
+
+	switch outcome {
+	case pipedOutcomeFailed:
+		return ExitCodeError{Code: code, Message: fmt.Sprintf("agent failed: %v", runErr)}
+	case pipedOutcomeNeedsInput:
+		return ExitCodeError{Code: code, Message: fmt.Sprintf("agent needs input: %d step(s) need an approval a piped run cannot give", len(pending))}
+	case pipedOutcomeTurnCeiling:
+		return ExitCodeError{Code: code, Message: fmt.Sprintf("agent stopped at the %d-turn ceiling without a final answer", ro.MaxTurns)}
 	}
 	return nil
 }

@@ -409,7 +409,7 @@ func TestCharOneShotLegacyContractUnchanged(t *testing.T) {
 	if o := observerForPipedMode(false, nil, false); o != nil {
 		t.Fatal("positional one-shot without -p must not gain an observer")
 	}
-	if c := confirmForPipedMode(false, nil); c != nil {
+	if c := confirmForPipedMode(false, nil, nil); c != nil {
 		t.Fatal("positional one-shot without -p must not gain a piped confirm")
 	}
 	// The banner text the legacy branch prints must survive: a regression

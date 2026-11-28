@@ -64,6 +64,7 @@ func agentCmd() *cobra.Command {
 		useConsole              bool
 		plain                   bool
 		printMode               bool
+		format                  string
 		live                    bool
 		deskLeasePath           string
 	)
@@ -83,6 +84,12 @@ func agentCmd() *cobra.Command {
 			defer stop()
 			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
 				return err
+			}
+			if err := validateOutputFormat(&format, "text", "json")(cmd, args); err != nil {
+				return err
+			}
+			if format == "json" && !printMode {
+				return ExitCodeError{Code: ExitErrGeneric, Message: "--format json requires -p/--print"}
 			}
 			// A desk lease is a private job. Decide it before any cluster lookup.
 			if deskLeasePath != "" {
@@ -237,6 +244,15 @@ func agentCmd() *cobra.Command {
 			sessionLog := openAgentSessionLog(activeTarget, func(msg string) {
 				fmt.Fprintf(errW, "warning: %s\n", msg)
 			})
+			// -p records the approvals it had to deny so the run can report
+			// needs_input. --format json keeps stdout for the result
+			// document, so the assistant stream goes nowhere; final_text
+			// carries the answer.
+			pipedPending := &pipedApprovals{}
+			agentOut := w
+			if printMode && format == "json" {
+				agentOut = io.Discard
+			}
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
@@ -245,7 +261,7 @@ func agentCmd() *cobra.Command {
 				MaxTokens:               maxTokens,
 				ContextWindow:           activeTarget.ContextWindow,
 				Observer:                observerForPipedMode(printMode, errW, verbose),
-				Confirm:                 confirmForPipedMode(printMode, errW),
+				Confirm:                 confirmForPipedMode(printMode, errW, pipedPending),
 				AutoApprove:             autoApprove,
 				Autonomy:                agent.AutonomyMode(autonomy),
 				EagerTools:              eagerTools,
@@ -258,7 +274,7 @@ func agentCmd() *cobra.Command {
 				Cluster:                 cluster,
 				Knowledge:               k,
 				ToolContext:             tc,
-				Output:                  w,
+				Output:                  agentOut,
 				MCPRegistry:             mcpReg,
 				RuntimeLoader:           loader,
 				SessionLog:              sessionLog,
@@ -289,7 +305,9 @@ func agentCmd() *cobra.Command {
 				// One-shot runs append to the daily session log. They do not
 				// replace agent-history.json, which is the interactive resume file.
 				if printMode {
-					return runOneShotPiped(ctx, a, instruction, errW, timeout, "")
+					return runOneShotPiped(ctx, a, instruction, pipedRunOptions{
+						Out: w, ErrW: errW, Timeout: timeout, Format: format, Approvals: pipedPending,
+					})
 				}
 				legacyOneShotBanner(errW, activeTarget.Model, maxTurns)
 
@@ -345,7 +363,8 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
 	cmd.Flags().BoolVar(&useConsole, "console", false, "Force the transcript console (deprecated: the console is now the default on an interactive terminal; use --plain for the legacy REPL). Approvals: y yes, n no; Enter does not approve")
 	cmd.Flags().BoolVar(&plain, "plain", false, "Run the legacy line-at-a-time REPL instead of the transcript console (takes precedence over --console)")
-	cmd.Flags().BoolVarP(&printMode, "print", "p", false, "One-shot piped execution: assistant text on stdout, tool badges and summary on stderr, no banner")
+	cmd.Flags().BoolVarP(&printMode, "print", "p", false, "One-shot piped execution: assistant text on stdout, tool badges and summary on stderr, no banner. Exit codes: 0 answered, 8 stopped at --max-turns, 9 needs an approval -p cannot give, 4 failed")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format for -p: text, or json (one axis.output/v1 document on stdout with outcome, turns, final_text, pending_approvals and exit_code)")
 	cmd.Flags().StringVar(&deskLeasePath, "desk-lease", "", "Private job: read a seat lease file and send one completion only when that lease is usable")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd

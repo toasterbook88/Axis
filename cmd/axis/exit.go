@@ -15,6 +15,8 @@ const (
 	ExitErrContextWrite  = 5
 	ExitErrIO            = 6
 	ExitErrModelUnlisted = 7 // axis ai route: model not listed on healthy backends
+	ExitAgentTurnCeiling = 8 // axis agent -p: stopped at --max-turns without a final answer
+	ExitAgentNeedsInput  = 9 // axis agent -p: a step needed an approval a piped run cannot give
 )
 
 // ExitCodeError wraps an exit code and a user-facing message so Cobra
