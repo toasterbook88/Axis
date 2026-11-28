@@ -3,8 +3,8 @@
 Date: 2026-11-28. Status: proposed. Builds on the approved `-p` exit-code change (`RunStop`,
 `LastRunOutcome()`, exit codes 8 and 9, `axis agent -p --format json`), which is PR #687 and not on
 `main` yet. Linear DEA-31. Line references marked "main" are at `ab2adcc` (v0.29.0). Lines marked
-"patch" are at `1084330`, the head of PR #687 (`feat/agent-p-exit-outcomes`) when this spec was
-rebased onto it; later commits on #687 may shift them.
+"patch" are at `b997e3a`, the head of PR #687 (`feat/agent-p-exit-outcomes`) after the outcome redaction and library corrections were independently reviewed; later
+commits on #687 may shift them. This remains a proposed design until its prerequisite merges.
 
 ## Problem
 
@@ -29,7 +29,7 @@ in its own words, or not at all:
    outcome={Stop:failed ...}`. The session log decides from `Run`'s error
    (`sessionlog.go:129-139`, main), so it records the last-round case as `max_turns` too. PR #687
    corrects `-p` alone: `runOneShotPiped` turns a nil error with `turn_ceiling` and a live context
-   error into a failure (`cmd/axis/agent_oneshot.go:284-288`, patch). `LastRunOutcome()`, the
+   error into a failure (`cmd/axis/agent_oneshot.go:306-310`, patch). `LastRunOutcome()`, the
    session log, the ceiling notice, the positional one-shot and sub-agents still see `turn_ceiling`.
 3. **A child at its ceiling reports a generic error.** `dispatchSubagent` checks only `Run`'s error
    and then the child's final text (`internal/agent/subagent.go:154-163`, main). At the ceiling
@@ -167,18 +167,18 @@ Two side effects read `decided`, never the context again:
 
 ### 3. `-p` keeps its values; the JSON gains `state` and `reason`
 
-- `classifyPipedRun` (`cmd/axis/agent_oneshot.go:214-225`, patch) adds `stop ==
+- `classifyPipedRun` (`cmd/axis/agent_oneshot.go:236-247`, patch) adds `stop ==
   agent.RunStopCancelled` to its first case, so a cancelled `-p` run stays `failed` and exit 4.
   Without it a last-round cancel, which returns nil, would fall through to `answered` and exit 0.
 - `runOneShotPiped` already sets `runErr = ctx2.Err()` for a nil error with `turn_ceiling` and a
-  live context error (`agent_oneshot.go:284-288`, patch). With section 2 that stop is `failed` or
+  live context error (`agent_oneshot.go:306-310`, patch). With section 2 that stop is `failed` or
   `cancelled` instead, so the condition becomes a nil error with either of those stops. The
   assignment is the same, and `ctx2.Err()` is non-nil in both cases (rules 2 and 3). Everything
   after it runs the existing error path unchanged: the `error: Agent failed:`
   line, no token summary, no history save, `data.error` set and `final_text` cleared. The two
   promises in `docs/machine-output.md` (patch) about `failed` hold for a last-round cancel or
   deadline.
-- `pipedRunResult` (`agent_oneshot.go:228-238`, patch) gains `state` and `reason` (`omitempty`):
+- `pipedRunResult` (`agent_oneshot.go:250-260`, patch) gains `state` and `reason` (`omitempty`):
   `answered` gives `completed`; `turn_ceiling` gives `failed`/`turn_ceiling`; `needs_input` gives
   `failed`/`needs_input`; `failed` gives `failed` with no reason, or `cancelled` when the stop was
   cancelled. The envelope's `status`, `ok` and `data.outcome` don't change. `docs/machine-output.md` gets the two
@@ -252,7 +252,7 @@ rule (`runErr = ctx2.Err()` for a nil error with a `failed` or `cancelled` stop)
 - an error, including a cancel or deadline, takes today's path: `error: Agent failed: <cause>` on
   stderr and exit 4;
 - `turn_ceiling` prints `error: agent stopped at the N-turn ceiling without a final answer` on
-  stderr, the line `-p` prints (`cmd/axis/agent_oneshot.go:348`, patch), and exits
+  stderr, the line `-p` prints (`cmd/axis/agent_oneshot.go:370`, patch), and exits
   `ExitErrAgentTurnCeiling` (8);
 - an answer still exits 0.
 
@@ -361,7 +361,7 @@ Verdict: revise
 Questions:
 - Can the `axis task approve` client ever receive `canceled` for its own request? Became a design change: section 5 now limits the client change to `axis task status`, because approve's response can't arrive once its request context has ended and delegate never runs a guarded command.
 - Does `hack/verify-deadcode.sh` flag exported constants that only `State()` uses? Verified: the script runs `golang.org/x/tools/cmd/deadcode`, which reports unreachable functions only (`hack/verify-deadcode.sh` comments and its "no unreachable functions" message), so constants are not checked.
-- Did the spec mean `-p`'s help or `--max-turns` help? Became a design change: section 6 now names the exit-code list in `-p`'s help, now at `cmd/axis/agent.go:385` (patch at `1084330`).
+- Did the spec mean `-p`'s help or `--max-turns` help? Became a design change: section 6 now names the exit-code list in `-p`'s help, now at `cmd/axis/agent.go:385` (patch at `b997e3a`).
 
 Kind: spec
 Reviewer: fresh-context subagent (Claude Code, general-purpose agent given only review-prompt.md)
@@ -380,3 +380,14 @@ Questions:
 - Should `SubAgentError` implement `Unwrap`? Became a design change: section 4 adds `Unwrap() error` returning `Err`, so `errors.Is(err, context.Canceled)` stays true as with today's `%w` text.
 - Is the async `outcome` field race-free? Became a design change: section 4 has `finish` take the outcome and set it under the task's `mu`, the lock `formatTaskStatus` already reads under.
 - Should `-p` tell a timeout from a backend error in `reason`? open: the session log does and `state`/`reason` don't; left to the maintainer, since no supervisor asks for it yet.
+
+
+## Citation refresh (2026-11-28)
+
+Patch references now name #687's independently reviewed code at `b997e3a`, including
+its parser-error, hard-denial and redirected-picker corrections. The code also redacts
+approval descriptions before clipping and returns independent outcome snapshots.
+The quoted line ranges were reread at that commit; the last-round cancellation gap
+this spec addresses still exists in `runLocked`. This refresh changes citations only;
+no proposed runtime behavior is implemented here. The timeout-versus-backend-error
+reason question remains open for the maintainer.
