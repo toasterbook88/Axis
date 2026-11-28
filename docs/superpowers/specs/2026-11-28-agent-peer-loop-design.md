@@ -162,20 +162,34 @@ Options for the maintainer:
   `output: a.output` and no observer or session log (`subagent.go:219-245`), so its tool
   badges and streamed text land on the parent's writer (`observer.go:131-135`), which in
   `-p` is stdout (`cmd/axis/agent.go:264`). The child's stream writer becomes `io.Discard`,
-  since its answer already comes back as the tool result or task output. Its events go to
-  the root's session log, and a sync child's events also go to the parent's observer for
-  the current turn (`agent.go:362-376` swaps sinks per turn), wrapped to tag each event
-  with depth and task id. An async child has no display observer, because the turn that
-  spawned it may be over.
+  since its answer already comes back as the tool result or task output. A sync child's
+  events also go to the parent's observer for the current turn (`agent.go:362-376` swaps
+  sinks per turn), wrapped to tag each event with depth and task id. The wrapper prefixes
+  every child call id with `<task-id>/` (`sync/` for a sync child), so a child's id can
+  never match a root call id in the console transcript. An async child has no display
+  observer, because the turn that spawned it may be over.
+- **A child writes tool records to the root's session log, never turn records.** The log
+  keeps one turn counter and one answer and ceiling flag (`sessionlog.go:92-139`), so a
+  child that called `beginTurn`, `finishTurn`, `markMaxTurns` or `noteResponse` on it would
+  bump the root's turn number and mark an answered root turn `stop=max_turns`. A child
+  gets a `childSessionLog` wrapper around the root's log. Its turn methods are no-ops; its
+  tool and approval records are written with the root's current turn number and two new
+  `sessionTool` fields, `depth` and `task` (`omitempty`, so root records are unchanged),
+  and the prefixed call id. The child's own turn count and stop reach the parent through
+  the receipt (D8).
 - **Async children never prompt.** A sync child runs inside the parent's turn, so its
   prompts reach the operator the way the parent's do. An async child may still be running
   after the turn ends, when the plain REPL is reading stdin (`cmd/axis/agent_repl.go:134-157`)
   and a prompt would race it. So an async child's confirm is
-  `autonomyConfirm(<root's current mode>, refuse)` (`autonomy.go:70-104`): the mode's own
+  `autonomyConfirm(<root's current mode>, refuse)` (`autonomy.go:70-104`), with the mode
+  read on every call so a `/autonomy` change applies to the next one: the mode's own
   auto-approvals and session approvals still run, and any call that would reach the
   surface confirm is refused, the way `pipedConfirm` sits under the autonomy wrapper
   (`cmd/axis/agent_oneshot.go:85-92`). The refusal tells the child to say in its answer
-  what it needs approved. Under default autonomy an async child cannot write; under edit
+  what it needs approved. `--auto-approve` adds its threshold to the root's own confirm
+  only (`agent.go:198-207`); an async child does not inherit it, so it refuses some calls
+  the root would approve. That is intended: the flag answers prompts the operator would
+  see, and an async child's never reach the operator. Under default autonomy an async child cannot write; under edit
   or full it writes and runs low-risk commands unattended, within what the operator
   granted with that mode.
 - `consult_model` stays hidden in the child (no resolver, `tools.go:181-186`); a child
@@ -326,7 +340,10 @@ Options for the maintainer:
   The wait selects on the dispatch context too: the turn ctx for a sync child, the task
   ctx for an async one. When that context ends first (Ctrl-C, the `-p` timeout from
   `cmd/axis/agent_oneshot.go:139`, or a session cancel), the child's `sessionCtx` is
-  cancelled and its open tasks end as `cancelled`. Then each task's result is appended to
+  cancelled and the fold waits up to 3 seconds more, the same bound as Close. A task whose
+  goroutine returned in that time folds as `cancelled`. One that did not folds as
+  `stopping, may still be running, results dropped`, and its late result is dropped the
+  way Close drops one: no state change, no session-log event. Then each task's result is appended to
   the child's answer under a line `nested <parent-id>/<id>: <outcome>`, where
   `<parent-id>` is the child's own task id, or `sync` for a sync child. Folded results
   carry no `check_task` hint, because each store numbers from `bg-1`
@@ -364,6 +381,10 @@ the parent sees where the child ran even when it failed. The no-invented-answer 
 ### D8. The spawn receipt
 
 Every spawn returns, and verbose mode prints, one receipt line before anything else.
+The verbose print goes through the observer when one is set, which is stderr in `-p`
+(`cmd/axis/agent_oneshot.go:110-115`), and to Output only when none is. Today the spawn
+line goes to Output even with an observer (`subagent.go:141-151`), which puts it on stdout
+under `-p --verbose`.
 Illustrative values:
 
 ```text
@@ -381,6 +402,8 @@ result, read by the parent model; no JSON shape changes.
 
 - `docs/current-state.md`: one bullet for the reachable peer loop.
 - `docs/release-notes.md`: the scope change, the receipt, and `cancelled`.
+- `docs/runbooks/agent-session-logs.md`: the `depth` and `task` fields on child tool and
+  approval records, and that child records carry the root's turn number.
 - `docs/decisions/agent-model-consult.md:13` says `spawn_subagent` is hidden by
   `neverTool`; that sentence changes to the chosen D1 scopes.
 - `docs/superpowers/specs/2026-11-16-delegation-brief-design.md` is left as written; this
@@ -500,6 +523,13 @@ running at once. The total per root turn is bounded only by `maxSubAgentDepth`,
 - A `-p` run with a sync child writes nothing of the child's to stdout, and the child's
   badges reach the observer on stderr tagged with depth. An async child writes nothing to
   Output after the turn returns. Child tool calls appear in the root's session log.
+  Under `-p --verbose` no receipt text reaches stdout; it reaches the stderr observer.
+- After a root turn that runs a sync child hitting its ceiling and an async child that
+  ends after the turn, the root log holds exactly one `turn.started` and one
+  `turn.finished` per root turn, with the root's turn number and the root's stop; every
+  child tool and approval record carries `depth` and `task`.
+- A root and a child that emit the same backend call id show as two separate calls in the
+  console transcript and in the session log.
 - After `Close()` returns, every task is either terminal and listed under `Cancelled`, or
   listed under `Stopping`; no task records a state change or writes a session-log event
   after that, and nothing further is written to Output.
@@ -507,7 +537,10 @@ running at once. The total per root turn is bounded only by `maxSubAgentDepth`,
   a node named only in `boundary` (falls through); a rule 1 name not in `nodes.yaml`
   (spawn refused); a nil or failing reload (rule 5).
 - Cancelling the turn ctx while a sync child waits on a running grandchild returns at
-  once, with the grandchild `cancelled` in the folded result. The folded text is pinned:
+  once, with the grandchild `cancelled` in the folded result. With the context-ignoring
+  stub as the grandchild, the turn returns within the 3-second bound and the fold reads
+  `stopping, may still be running, results dropped`; the grandchild's late result changes
+  nothing. The folded text is pinned:
   `nested sync/bg-1: ...` with no `check_task` hint.
 - An edit child writes a file, then the root's `undo_last` restores that write. A
   child's `todo init` leaves the root's list unchanged.
