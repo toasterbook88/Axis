@@ -521,3 +521,36 @@ Questions:
 - Is the child's read of the root scope race-free against `SetAutonomy`? Became D2: the read is under the root's `dispatchMu`, with a `-race` case in Validation.
 - Should a child's scope line tell its parent rather than the operator to elevate? Became D3: a child reports the mode it needs in its answer.
 - Should `spawn_subagent`'s description and `target_node` text change? Became D3: rewritten in the same PR.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: 67cba12
+Date: 2026-11-28
+Verdict: revise
+
+1. Major: D4 rule 3 read `boundary`, so a node the brief says to avoid became the target. Fixed in 386aca5: rule 3 tokenizes `objective` and `prompt` only, with a table case for a node named only in `boundary`.
+
+2. Major: a sync child's wait on its grandchildren ignored the turn's cancel and the `-p` timeout. Fixed in 386aca5: the wait selects on the dispatch context and ends open grandchildren as `cancelled`, with a Validation case.
+
+3. Major: folded grandchild receipts carried `check_task` ids from the child's own `bg-1` namespace. Fixed in 386aca5: folded results use `nested <parent-id>/<id>` with no `check_task` hint, pinned in Validation.
+
+4. Major: an edit child's writes were invisible to the root's `undo_last` and `review_changes`, because every registry makes its own checkpointer. Fixed in 386aca5: D2 shares the root's checkpointer and todo store, with an undo Validation case.
+
+5. Major: an async edit or exec child could prompt after the turn ended while the plain REPL reads stdin. Fixed in 386aca5: D2 refuses any async child call that needs a prompt, as `pipedConfirm` does; sync children prompt as today. Plain-REPL test added.
+
+6. Minor: a child kept advertising tools the lowered root scope no longer allows. Fixed in 386aca5: a child lowers its registry scope and refreshes its visible-tools message at each round, and the refusal text names the lowered mode.
+
+7. Minor: Research said A2A uses `cancelled`; A2A spells it `canceled`. Fixed in 386aca5: D6 and Research say the word matches MCP and DEA-31's `RunStateCancelled`.
+
+8. Minor: a rule 1 target was never checked against `nodes.yaml`. Fixed in 386aca5: an unknown name refuses the spawn with the available-nodes error `runRemote` gives.
+
+Questions:
+
+- Does the async return keep "started in background"? Became D8: the existing return text follows the receipt line unchanged, so `subagent_test.go:87`, `:131` stay green.
+- What happens when the view reload fails or `Reload` is nil? Became D4 rule 4: falls through to rule 5, `none (cluster view unavailable)`, with a table case.
+- Does a running child's confirm follow the root's mode changes? Became D2: the child prompts through the root's current confirm, with a mode-transition table test.
+- Is rule 3 case-sensitive? Became D4: yes, matching `findNode` (`tools_cluster.go:15-22`).
+- What does `-p` do with async children at exit? Became D6: they are cancelled and reported, and the spawn description says so.
+- Are tasks visible at cluster scope? Became D6: hidden with D1's tools and shown again when the mode is raised.
