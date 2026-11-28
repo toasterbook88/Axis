@@ -386,6 +386,10 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "text", "Output format for -p: text, or json (one axis.output/v1 document on stdout with outcome, turns, final_text, pending_approvals and exit_code; the streamed text goes to stderr)")
 	cmd.Flags().StringVar(&deskLeasePath, "desk-lease", "", "Private job: read a seat lease file and send one completion only when that lease is usable")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
+	// A flag Cobra cannot parse fails before RunE, so the -p --format json
+	// failure document is written by executeRoot, which needs to know the
+	// error came from here.
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return agentFlagError{err: err} })
 	return cmd
 }
 

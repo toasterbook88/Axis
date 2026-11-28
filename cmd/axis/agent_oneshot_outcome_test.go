@@ -153,18 +153,30 @@ func TestPipedConfirmRecordsDenials(t *testing.T) {
 	c("consult_model", "ask seat-a", 0)
 	c("run_shell", "rm -rf /", 100)
 	c("mcp_files_delete", "delete x", 0)
+	c("run_on_node", "[on m1] rm -rf /", 100)
+	c("run_shell", "ollama run big-model", 87)
+	c("fleet_exec", "[on 2 nodes] rm -rf /", 100)
 	got := rec.list()
-	if len(got) != 5 {
-		t.Fatalf("recorded %d denials, want 5: %+v", len(got), got)
+	if len(got) != 8 {
+		t.Fatalf("recorded %d denials, want 8: %+v", len(got), got)
 	}
 	want := []pendingApproval{
 		{Tool: "run_shell", Request: "make deploy", RiskScore: 40, Clears: "--autonomy full"},
 		{Tool: "run_shell", Request: "git push", RiskScore: 75, Clears: "interactive approval"},
 		{Tool: "consult_model", Request: "ask seat-a", RiskScore: 0, Clears: "interactive approval"},
-		// Full autonomy still asks for a safety-blocked override and for
-		// every unlisted MCP tool, so the hint must not name that flag.
-		{Tool: "run_shell", Request: "rm -rf /", RiskScore: 100, Clears: "interactive approval"},
+		// A deny (score 100) on a guarded-runner tool clears with nothing:
+		// guarded execution re-applies the rule after an override.
+		{Tool: "run_shell", Request: "rm -rf /", RiskScore: 100, Clears: "none"},
+		// Full autonomy still asks for every unlisted MCP tool, so the hint
+		// must not name that flag.
 		{Tool: "mcp_files_delete", Request: "delete x", RiskScore: 0, Clears: "auto_approve_tools"},
+		{Tool: "run_on_node", Request: "[on m1] rm -rf /", RiskScore: 100, Clears: "none"},
+		// Blocks below a deny (learned-bad, cluster RAM) are not re-checked
+		// by the guarded runner, so an interactive override can run them.
+		{Tool: "run_shell", Request: "ollama run big-model", RiskScore: 87, Clears: "interactive approval"},
+		// fleet_exec is not shown to re-apply the rule, so it keeps the
+		// interactive hint.
+		{Tool: "fleet_exec", Request: "[on 2 nodes] rm -rf /", RiskScore: 100, Clears: "interactive approval"},
 	}
 	for i := range want {
 		if got[i] != want[i] {

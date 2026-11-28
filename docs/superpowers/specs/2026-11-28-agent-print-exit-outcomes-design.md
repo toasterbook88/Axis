@@ -46,7 +46,9 @@ how the run ended:
    (`internal/agent/autonomy.go`): `auto_approve_tools` for an `mcp_` tool, which asks in every mode
    unless `nodes.yaml` allowlists it; `interactive approval` for consult_model and any score of 75
    or more (a safety rule's ask, or a safety-blocked override at 80 and up), which full autonomy
-   still sends to the confirm; `--autonomy full` otherwise. The stderr notice names the same thing.
+   still sends to the confirm; `none` for a `run_shell` or `run_on_node` deny (score 100), because
+   the guarded runner (`guardedAgentCommandRunner`) re-applies the same `DefaultRuleSet` and blocks
+   it after any override; `--autonomy full` otherwise. The stderr notice names the same thing.
    Each `ScopeRefused` tool becomes an entry with `clears` `--autonomy full`.
 3. `classifyPipedRun(err, stop, pending)` maps the run to an outcome and exit code, first match
    wins:
@@ -71,7 +73,12 @@ how the run ended:
    (`tokens_in`, `tokens_out`, `estimated`) and `elapsed_ms`. The document is written for every
    outcome, failures included. A failure before the agent runs (flag conflict, unknown role, config
    or backend startup) writes a `failed` document from the command, with `exit_code` the code the
-   process exits with (1 or 2) and `turns` 0.
+   process exits with (1 or 2) and `turns` 0. A flag Cobra cannot parse fails before `RunE`, so
+   `agentCmd`'s flag-error func marks the error and `executeRoot` (used by `main`) writes the same
+   document when the raw arguments before `--` ask for `-p` and `--format json`. The automatic
+   model picker (no `--model`, no default model) starts only when stdin and the picker's writer
+   are both terminals, the same test `REPLSelector` applies, so redirecting stderr falls through to
+   non-interactive resolution instead of aborting; `--select` still forces the picker.
 5. In text mode, non-zero outcomes return an `ExitCodeError` whose message names the cause
    (`agent stopped at the N-turn ceiling without a final answer`, `agent needs input: N step(s)
    need an approval a piped run cannot give`).

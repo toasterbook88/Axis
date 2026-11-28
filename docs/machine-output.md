@@ -77,15 +77,23 @@ run's outcome, and `ok` is true only for `answered`.
   (the approval text, up to 400 characters), `risk_score` and `clears`, what
   lets a rerun through: `--autonomy full`; `auto_approve_tools` for an
   external MCP tool, which asks in every mode unless `nodes.yaml` lists it
-  under `mcp_servers.<server>.auto_approve_tools`; or `interactive approval`
+  under `mcp_servers.<server>.auto_approve_tools`; `interactive approval`
   for consult_model and any command scoring 75 or more (a safety rule's ask or
-  a safety-blocked override), which no flag clears.
+  a safety-blocked override), which no flag clears; or `none` for a `run_shell`
+  or `run_on_node` command a safety rule denies outright (score 100), which
+  guarded execution blocks again even after an interactive override.
 - A call to a tool the `--autonomy` mode hides (for example `run_shell` in the
   default observe mode) also lands in `pending_approvals`, with `request`
   `hidden by the current --autonomy mode` and `clears` `--autonomy full`.
 - A request the model retries is listed once.
 - `--max-turns` must be at least 1 with `-p`, and `--format json` cannot be
   combined with `--desk-lease`.
+- A flag that does not parse (a malformed value such as `--max-turns nope`, or
+  an unknown flag) still gets a `failed` document with exit code 1, when the
+  arguments before `--` ask for `-p` and `--format json`.
+- With no `--model` and no `agent.default_model`, the model picker opens only
+  when stdin and stderr are both terminals; otherwise the model resolves as it
+  does for a non-interactive run. `--select` always opens the picker.
 - `usage.estimated` is true when the backend reported no usage; `tokens_in` is
   then the conversation estimate.
 

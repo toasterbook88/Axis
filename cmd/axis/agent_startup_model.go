@@ -69,7 +69,12 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	provider := p.Provider
 	cloudModel := p.CloudModel
 
-	isTerm := p.In != nil && term.IsTerminal(int(p.In.Fd()))
+	// The automatic picker needs a terminal on both ends: REPLSelector only
+	// prompts when stdin and its writer are terminals and otherwise lists the
+	// models and returns no choice. With p.Out redirected (as -p --format json
+	// does with stderr) fall through to non-interactive resolution instead of
+	// aborting. An explicit --select still runs the picker.
+	isTerm := p.In != nil && term.IsTerminal(int(p.In.Fd())) && writerIsTerminal(p.Out)
 	if p.SelectModel || (p.Model == "" && !hasDefaultModel && isTerm) {
 		if len(choices) == 0 {
 			return agentStartupBackendResult{}, ExitCodeError{
@@ -836,4 +841,10 @@ var probeEndpointFn = func(url string) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// writerIsTerminal reports whether w is a terminal file.
+func writerIsTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }

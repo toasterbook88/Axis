@@ -26,8 +26,7 @@ const Version = buildinfo.Version
 
 func main() {
 	root := newRootCmd()
-	root.SetArgs(normalizeHardwareArgs(os.Args[1:]))
-	err := root.Execute()
+	err := executeRoot(root, normalizeHardwareArgs(os.Args[1:]))
 	_ = events.FlushEvents(1 * time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

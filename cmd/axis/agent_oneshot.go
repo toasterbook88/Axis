@@ -136,6 +136,9 @@ func (p *pipedApprovals) list() []pendingApproval {
 //   - consult_model and any command scoring ScoreAskAlways or more (a
 //     specific safety rule's ask, or a safety-blocked override) ask even
 //     under --autonomy full, so only an interactive run clears them;
+//   - a run_shell or run_on_node command a safety rule denies outright (score
+//     100) clears with nothing: guarded execution re-evaluates the same rule
+//     set and blocks it even after an interactive override;
 //   - anything else clears with --autonomy full.
 //
 // Each denial is also recorded in rec (nil records nothing) so the run can
@@ -150,6 +153,9 @@ func pipedConfirm(w io.Writer, rec *pipedApprovals) agent.ConfirmFunc {
 		case tool == "consult_model":
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session (consult_model still asks under --autonomy full and --auto-approve; run interactively)\n", tool)
 			item.Clears = pipedClearsInteractive
+		case score >= 100 && guardedRecheck(tool):
+			fmt.Fprintf(w, "✗ %s denied: a safety rule denies it outright, and guarded execution enforces the same rule after any override (no approval clears it)\n", tool)
+			item.Clears = pipedClearsNone
 		case score >= 80:
 			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and safety blocked it (only an interactive override can run it)\n", tool)
 			item.Clears = pipedClearsInteractive
@@ -170,7 +176,15 @@ const (
 	pipedClearsAutonomyFull = "--autonomy full"
 	pipedClearsInteractive  = "interactive approval"
 	pipedClearsMCPAllowlist = "auto_approve_tools"
+	pipedClearsNone         = "none"
 )
+
+// guardedRecheck reports whether tool's command runs through the guarded
+// runner (guardedAgentCommandRunner), whose PrepareGuardedExecution applies
+// the same safety rule set again, so an override of a deny still ends blocked.
+func guardedRecheck(tool string) bool {
+	return tool == "run_shell" || tool == "run_on_node"
+}
 
 // observerForPipedMode returns the stderr badge observer for -p runs and nil
 // otherwise (nil keeps the agent's long-standing stdout fallback formatting
