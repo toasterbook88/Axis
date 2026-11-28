@@ -40,7 +40,8 @@ how the run ended:
    model called that the mode hides but `--autonomy full` would expose; never-tools are not listed.
    The fields have their own mutex so they can be read without `runMu`.
 2. `cmd/axis`: `pipedConfirm(w, rec)` keeps its notices and also appends each denial to a
-   mutex-guarded `pipedApprovals` recorder: tool, the confirm text clipped to 400 runes, risk
+   mutex-guarded `pipedApprovals` recorder: tool, the confirm text masked with the agent's
+   structured surface redactor before clipping to 400 runes, risk
    score, and `clears`, what lets a rerun through. A repeat of the same tool and request is recorded
    once. `clears` follows `autonomyConfirm`
    (`internal/agent/autonomy.go`): `auto_approve_tools` for an `mcp_` tool, which asks in every mode
@@ -259,3 +260,34 @@ Questions:
 - Does the daemon path re-apply the rules for a step denied at score 100? Open: `-p` runs in process and never takes that path; out of scope for this change.
 - Can a turbo rewrite turn a denied command into an allowed one? Verified: `turboexec.Prepare` only appends `--ctx-size` and `--flash-attn`, and the evaluator runs on the rewritten command (`internal/execution/prepare.go:414-418`).
 - `--bogus -p --format json` cannot tell whether `-p` is the unknown flag's value. Open: the scan treats `-p` as a flag and writes a document, which errs toward a parseable failure; pflag gives no way to know the unknown flag's arity.
+
+
+Kind: diff
+Reviewer: fresh-context Codex subagent A, followed by re-review after corrections
+Model: OpenAI GPT (same family as the correction author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: b997e3a29836d35fb27e04450b865441871235e2
+Date: 2026-11-28
+Verdict: approve
+
+The initial review at 558f1527 approved with two minor changes. Both were reproduced
+with failing tests and fixed in b997e3a: `LastRunOutcome` now returns an independent
+refused-tool slice, and full-mode visibility shares the consult-resolver prerequisite
+with actual visibility. Re-review approved with no remaining findings or questions.
+An isolated clone passed both affected package suites under `-race`, plus public
+boundary, doc-facts, spec and whitespace gates. The approval JSON redaction regression
+covers bearer values, API-key headers, token assignments and clipping.
+
+Kind: diff
+Reviewer: independent fresh-context Codex subagent B, followed by re-review after corrections
+Model: OpenAI GPT (same family as the correction author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: b997e3a29836d35fb27e04450b865441871235e2
+Date: 2026-11-28
+Verdict: approve
+
+The full initial review at 558f1527 found no defect. Re-review at b997e3a independently
+approved the snapshot and visibility corrections. Focused race tests covering outcomes,
+scope, consult, registry, malformed flags, main subprocess output, piped runs, picker
+behavior and guarded denials passed in an isolated clone. The earlier full package and
+documentation/public/spec gates passed at 558f1527. No declines or open questions.
