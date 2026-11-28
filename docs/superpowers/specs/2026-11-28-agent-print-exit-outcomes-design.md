@@ -270,7 +270,7 @@ Head: b997e3a29836d35fb27e04450b865441871235e2
 Date: 2026-11-28
 Verdict: approve
 
-1. The initial review at 558f1527 approved with two minor changes. Both were reproduced
+Note: The initial review at 558f1527 approved with two minor changes. Both were reproduced
    with failing tests and fixed in b997e3a: `LastRunOutcome` now returns an independent
    refused-tool slice, and full-mode visibility shares the consult-resolver prerequisite
    with actual visibility. Re-review approved with no remaining findings or questions.
@@ -286,7 +286,7 @@ Head: b997e3a29836d35fb27e04450b865441871235e2
 Date: 2026-11-28
 Verdict: approve
 
-1. The full initial review at 558f1527 found no defect. Re-review at b997e3a independently
+Note: The full initial review at 558f1527 found no defect. Re-review at b997e3a independently
    approved the snapshot and visibility corrections. Focused race tests covering outcomes,
    scope, consult, registry, malformed flags, main subprocess output, piped runs, picker
    behavior and guarded denials passed in an isolated clone. The earlier full package and
