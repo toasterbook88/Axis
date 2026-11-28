@@ -587,3 +587,24 @@ Questions:
 - Is rule 3 case-sensitive? Became D4: yes, matching `findNode` (`tools_cluster.go:15-22`).
 - What does `-p` do with async children at exit? Became D6: they are cancelled and reported, and the spawn description says so.
 - Are tasks visible at cluster scope? Became D6: hidden with D1's tools and shown again when the mode is raised.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude (fresh top-tier session, same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: d18174c
+Date: 2026-11-28
+Verdict: revise
+
+1. Major: the async "never prompt" rule could not hold against `autonomyConfirm`, which approves edits under edit and full modes before any base confirm runs. Fixed in 863e1a7: an async child's confirm is `autonomyConfirm(<root mode>, refuse)`, D2 states it acts unattended within the mode's auto-approvals, and Validation tests default and edit modes separately.
+
+2. Major: rule 1 refused every target with no cluster config, breaking three existing subagent tests. Fixed in 863e1a7: with no config loaded the name is used as given with reason `set by parent, cluster config not loaded`, with a table case.
+
+3. Major: sharing the root's todo store let a child's `todo init` erase the root's plan. Fixed in 863e1a7: only the checkpointer is shared; each agent keeps its own todo store, with a Validation case.
+
+4. Minor: nothing bounded how many sub-agents one session runs. Fixed in 863e1a7: D2 caps running sub-agents at 6 per session with a no-retry refusal, and Research cites Claude Code's limit and states the worst-case request count.
+
+Questions:
+
+- Does a lowered child climb back when the root's mode is raised? Became D2: its effective scope is the lower of its spawn scope and the root's current scope, with an edit to cluster to edit case.
+- Does `LastRunOutcome` carry a turn count for the receipt? Verified: the `-p` exit-code change's output document carries `turns` and `max_turns` from it (`2026-11-28-exit-code-fix.patch`, outside the repo).
