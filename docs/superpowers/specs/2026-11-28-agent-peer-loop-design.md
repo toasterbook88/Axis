@@ -156,6 +156,15 @@ Options for the maintainer:
   scope and refreshes its visible-tools message (`agent.go:345`), so it advertises only
   what it can call. The refusal text
   for a call caught between rounds says the operator lowered the session to that scope.
+- **A child's output goes to events, not to the surface's writer.** Today the child gets
+  `output: a.output` and no observer or session log (`subagent.go:219-245`), so its tool
+  badges and streamed text land on the parent's writer (`observer.go:131-135`), which in
+  `-p` is stdout (`cmd/axis/agent.go:264`). The child's stream writer becomes `io.Discard`,
+  since its answer already comes back as the tool result or task output. Its events go to
+  the root's session log, and a sync child's events also go to the parent's observer for
+  the current turn (`agent.go:362-376` swaps sinks per turn), wrapped to tag each event
+  with depth and task id. An async child has no display observer, because the turn that
+  spawned it may be over.
 - **Async children never prompt.** A sync child runs inside the parent's turn, so its
   prompts reach the operator the way the parent's do. An async child may still be running
   after the turn ends, when the plain REPL is reading stdin (`cmd/axis/agent_repl.go:134-157`)
@@ -175,8 +184,9 @@ Options for the maintainer:
   matches the cap the code already enforces (`subagent.go:91`) and makes the prompt agree.
 - **At most 6 sub-agents run at once per session**, counted on the root across all
   depths, sync and async. A spawn at the cap is refused with "sub-agent limit reached (6
-  running); finish or check a running one before spawning again; do not retry this
-  spawn now". 6 is `maxParallelTools` (`agent.go:19`), the most calls one round runs at
+  running); wait for a running one to end, using check_task, before spawning again; do
+  not retry this spawn now". No tool cancels a running sub-agent; that stays out of
+  scope. 6 is `maxParallelTools` (`agent.go:19`), the most calls one round runs at
   once, so one round can still fan out fully. Claude Code caps running subagents at 20
   with the same no-retry error (Research).
 
@@ -218,7 +228,10 @@ child, the target comes from the first rule that applies:
    Reason `named in brief`. A brief saying "worker-1" matches `worker-1` and not `worker`.
    `sources` and `boundary` are left out because `boundary` lists what the child must not
    do (`subagent.go:54`), so a node named there is the one to avoid. Matching is
-   case-sensitive, as `findNode` is (`tools_cluster.go:15-22`). Config names are the names
+   case-sensitive, as `findNode` is (`tools_cluster.go:15-22`). A negated mention in
+   `objective` or `prompt` ("leave worker-1 alone") still matches; a parent that means to
+   avoid a node says so in `boundary` or sets `target_node`, and the receipt shows the
+   choice either way. Config names are the names
    `runRemote` resolves, so a rule 1 or rule 3 target is always reachable by the child.
 4. **Ranked.** `reqs := placement.InferRequirements(objective + "\n" + prompt)` matched a
    workload profile (`reqs.Workload.Class != models.ClassUnknown`, see
@@ -275,8 +288,10 @@ Options for the maintainer:
   finishes as cancelled, whatever `err` and `LastRunOutcome` say. A cancel that lands during
   the last turn's tool calls turns into tool errors and a nil return at the ceiling
   (`agent.go:462-518`), so the error alone cannot be trusted here.
-- `func (a *Agent) Close() []string` cancels `sessionCtx` and returns the ids of tasks that
-  were still running. It is safe to call twice.
+- `func (a *Agent) Close() []string` cancels `sessionCtx`, waits up to 3 seconds (the
+  console's own shutdown wait, `cmd/axis/agent_console_startup.go:38`) for task goroutines
+  to reach a terminal state, and returns the ids of tasks that were still running. It is
+  safe to call twice.
 - Close runs where each session really ends, and its result is printed, one line on the
   surface's error writer when the list is not empty:
   `cancelled N open sub-agent task(s): bg-2, bg-3`.
@@ -459,6 +474,11 @@ child requests at the default `max_turns`.
 - cmd/axis tests assert the `cancelled N open sub-agent task(s)` line on the error writer
   for the one-shot path and for the startup console, and no line when nothing was open.
 - A `go test -race` case changes `/autonomy` on the root while an async child dispatches.
+- A `-p` run with a sync child writes nothing of the child's to stdout, and the child's
+  badges reach the observer on stderr tagged with depth. An async child writes nothing to
+  Output after the turn returns. Child tool calls appear in the root's session log.
+- After `Close()` returns, no task is still running and nothing further is written to
+  Output.
 - D4 table adds a config with both `worker` and `worker-1` and a brief naming `worker-1`;
   a node named only in `boundary` (falls through); a rule 1 name not in `nodes.yaml`
   (spawn refused); a nil or failing reload (rule 5).
