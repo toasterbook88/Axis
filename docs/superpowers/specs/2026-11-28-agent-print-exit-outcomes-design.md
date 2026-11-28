@@ -270,13 +270,13 @@ Head: b997e3a29836d35fb27e04450b865441871235e2
 Date: 2026-11-28
 Verdict: approve
 
-The initial review at 558f1527 approved with two minor changes. Both were reproduced
-with failing tests and fixed in b997e3a: `LastRunOutcome` now returns an independent
-refused-tool slice, and full-mode visibility shares the consult-resolver prerequisite
-with actual visibility. Re-review approved with no remaining findings or questions.
-An isolated clone passed both affected package suites under `-race`, plus public
-boundary, doc-facts, spec and whitespace gates. The approval JSON redaction regression
-covers bearer values, API-key headers, token assignments and clipping.
+1. The initial review at 558f1527 approved with two minor changes. Both were reproduced
+   with failing tests and fixed in b997e3a: `LastRunOutcome` now returns an independent
+   refused-tool slice, and full-mode visibility shares the consult-resolver prerequisite
+   with actual visibility. Re-review approved with no remaining findings or questions.
+   An isolated clone passed both affected package suites under `-race`, plus public
+   boundary, doc-facts, spec and whitespace gates. The approval JSON redaction regression
+   covers bearer values, API-key headers, token assignments and clipping.
 
 Kind: diff
 Reviewer: independent fresh-context Codex subagent B, followed by re-review after corrections
@@ -286,8 +286,8 @@ Head: b997e3a29836d35fb27e04450b865441871235e2
 Date: 2026-11-28
 Verdict: approve
 
-The full initial review at 558f1527 found no defect. Re-review at b997e3a independently
-approved the snapshot and visibility corrections. Focused race tests covering outcomes,
-scope, consult, registry, malformed flags, main subprocess output, piped runs, picker
-behavior and guarded denials passed in an isolated clone. The earlier full package and
-documentation/public/spec gates passed at 558f1527. No declines or open questions.
+1. The full initial review at 558f1527 found no defect. Re-review at b997e3a independently
+   approved the snapshot and visibility corrections. Focused race tests covering outcomes,
+   scope, consult, registry, malformed flags, main subprocess output, piped runs, picker
+   behavior and guarded denials passed in an isolated clone. The earlier full package and
+   documentation/public/spec gates passed at 558f1527. No declines or open questions.
