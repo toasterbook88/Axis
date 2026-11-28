@@ -201,3 +201,24 @@ Questions:
 - `--max-turns 0` reported `turn_ceiling` with 0 turns. Verified: since e2958c0, `-p` refuses `--max-turns` below 1; `TestAgentCmdPrintRejectsZeroMaxTurns`.
 - A deadline during the last round's tools reported `turn_ceiling`. Verified: since e2958c0, a ceiling stop with the request context done is `failed`; `TestPipedRunDeadlineOnLastRoundIsFailed`.
 - Background work that confirms after `pending_approvals` is read would be missed. Verified: `run_background` and `spawn_subagent` are never-tools (`internal/agent/scope.go:96-100`), so a `-p` run cannot start such work.
+
+Kind: diff
+Reviewer: fresh-context subagent C, re-review after the revise (Claude Code `general-purpose`, given only `docs/superpowers/review-prompt.md` and its five inputs)
+Model: Anthropic Claude Opus 5.5 (same family as the author)
+Base: ab2adcc5429ba1025492eebc8dcfe7f6bc001ea4
+Head: c7b3ed3ed52a1e4d639ee1136dbcbe1b7b3e351f
+Date: 2026-11-28
+Verdict: approve-with-changes
+
+1. Minor: the spec gate failed because the last diff review was revise. Fixed in this block.
+
+2. Minor: an invalid `--autonomy` with `-p --format json` wrote no document, since it was checked before the writer was registered. Fixed in ed77d20: the check runs after it; `TestAgentCmdJSONFlagErrorsWriteDocument`.
+
+3. Minor: `--desk-lease` with `-p --format json` printed the seat's raw reply on stdout, and a failure exited 6 with an agent document. Fixed in ed77d20: `--format json` refuses `--desk-lease` with exit 1 and a document; same test.
+
+4. Minor: removing the scope record from the deferred bridge, or the `final_text` clearing on failure, left the tests green. Fixed in ed77d20: `TestLastRunOutcomeScopeRefusedThroughBridge` and `TestPipedRunFailedJSONClearsFinalText`, each of which fails under its mutation.
+
+Questions:
+
+- The spec changed after its spec review (scope-hidden tools, the startup document, the `--max-turns` refusal). Open: those changes came from the review findings themselves and this diff review covered them; whether they need a second spec review is the maintainer's call.
+- A model that retries a denied step inflates `pending_approvals`. Verified: since ed77d20 the recorder keeps one entry per tool and request; `TestPipedApprovalsDedupeRetries`.
