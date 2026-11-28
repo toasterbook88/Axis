@@ -46,9 +46,9 @@ how the run ended:
    (`internal/agent/autonomy.go`): `auto_approve_tools` for an `mcp_` tool, which asks in every mode
    unless `nodes.yaml` allowlists it; `interactive approval` for consult_model and any score of 75
    or more (a safety rule's ask, or a safety-blocked override at 80 and up), which full autonomy
-   still sends to the confirm; `none` for a `run_shell` or `run_on_node` deny (score 100), because
-   the guarded runner (`guardedAgentCommandRunner`) re-applies the same `DefaultRuleSet` and blocks
-   it after any override; `--autonomy full` otherwise. The stderr notice names the same thing.
+   still sends to the confirm; `none` for a `run_shell`, `run_on_node` or `fleet_exec` deny (score
+   100), because the guarded runner (`guardedAgentCommandRunner`, which runs each fleet_exec node as
+   `RunOnNode`) re-applies the same `DefaultRuleSet` and blocks it after any override; `--autonomy full` otherwise. The stderr notice names the same thing.
    Each `ScopeRefused` tool becomes an entry with `clears` `--autonomy full`.
 3. `classifyPipedRun(err, stop, pending)` maps the run to an outcome and exit code, first match
    wins:
@@ -131,6 +131,16 @@ how the run ended:
   failure writes a `failed` document with its real exit code; text mode writes none; `-p
   --max-turns 0` is refused; the positional run at the ceiling exits 0. Removing the stream
   routing or the recorder from `agentCmd` fails these (checked by mutation).
+- `cmd/axis/agent_flag_error_test.go`: through the real root command, a malformed typed value, an
+  unknown flag (before or after `-p`), a `-sp` or `-xp` cluster, a root flag before `agent` and
+  `--format JSON` each write one `failed` document with `max_turns` 25; text mode, json without
+  `-p`, a later `--format text`, `-p=false`, `--model -p` and flags after `--` write none; a RunE
+  error writes exactly one; main itself, run in a child process, writes the document and exits 1.
+  `clears` `none` rests on `TestHardDenyIsAlsoGuardedDeny`: a gate deny at 100 is a guarded deny
+  on both agent surfaces. `TestStartupPickerNeedsTerminalAtBothEnds` covers the picker gate with
+  a stand-in terminal. Removing the main wiring, the picker's output check, `fleet_exec` from
+  `guardedRecheck`, the `--format` normalization or the unknown-shorthand skip each fails one of
+  these (checked by mutation).
 - Manual: the built binary against a stub Ollama for the ceiling, answer and git-push cases, and
   with no backend for the startup and mid-run failure documents.
 

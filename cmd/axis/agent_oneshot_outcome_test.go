@@ -174,9 +174,9 @@ func TestPipedConfirmRecordsDenials(t *testing.T) {
 		// Blocks below a deny (learned-bad, cluster RAM) are not re-checked
 		// by the guarded runner, so an interactive override can run them.
 		{Tool: "run_shell", Request: "ollama run big-model", RiskScore: 87, Clears: "interactive approval"},
-		// fleet_exec is not shown to re-apply the rule, so it keeps the
-		// interactive hint.
-		{Tool: "fleet_exec", Request: "[on 2 nodes] rm -rf /", RiskScore: 100, Clears: "interactive approval"},
+		// fleet_exec runs each node through RunOnNode, the guarded runner
+		// (TestDispatchFleetExecUsesGuardedRunner), so a deny clears with nothing.
+		{Tool: "fleet_exec", Request: "[on 2 nodes] rm -rf /", RiskScore: 100, Clears: "none"},
 	}
 	for i := range want {
 		if got[i] != want[i] {

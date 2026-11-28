@@ -136,9 +136,10 @@ func (p *pipedApprovals) list() []pendingApproval {
 //   - consult_model and any command scoring ScoreAskAlways or more (a
 //     specific safety rule's ask, or a safety-blocked override) ask even
 //     under --autonomy full, so only an interactive run clears them;
-//   - a run_shell or run_on_node command a safety rule denies outright (score
-//     100) clears with nothing: guarded execution re-evaluates the same rule
-//     set and blocks it even after an interactive override;
+//   - a run_shell, run_on_node or fleet_exec command a safety rule denies
+//     outright (score 100) clears with nothing: guarded execution
+//     re-evaluates the same rule set and blocks it even after an interactive
+//     override;
 //   - anything else clears with --autonomy full.
 //
 // Each denial is also recorded in rec (nil records nothing) so the run can
@@ -180,10 +181,15 @@ const (
 )
 
 // guardedRecheck reports whether tool's command runs through the guarded
-// runner (guardedAgentCommandRunner), whose PrepareGuardedExecution applies
+// runner (guardedAgentCommandRunner: run_shell as RunShell, run_on_node and
+// each fleet_exec node as RunOnNode), whose PrepareGuardedExecution applies
 // the same safety rule set again, so an override of a deny still ends blocked.
 func guardedRecheck(tool string) bool {
-	return tool == "run_shell" || tool == "run_on_node"
+	switch tool {
+	case "run_shell", "run_on_node", "fleet_exec":
+		return true
+	}
+	return false
 }
 
 // observerForPipedMode returns the stderr badge observer for -p runs and nil

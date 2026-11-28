@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -44,6 +46,9 @@ func TestRootAgentFlagErrorsWriteFailedDocument(t *testing.T) {
 		"unknown flag before -p": {"agent", "--bogus-flag", "-p", "--format=json", "check"},
 		"shorthand cluster -sp":  {"agent", "-sp", "--format", "json", "--max-turns", "nope", "check"},
 		"root flag before agent": {"--no-color", "agent", "--print", "--format", "json", "--bogus", "check"},
+		"format in capitals":     {"agent", "-p", "--format", "JSON", "--max-turns", "nope", "check"},
+		"format with spaces":     {"agent", "-p", "--format", " json", "--bogus", "check"},
+		"unknown shorthand -xp":  {"agent", "-xp", "--format", "json", "check"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -115,6 +120,67 @@ func TestHardDenyIsAlsoGuardedDeny(t *testing.T) {
 			if d := ev.Evaluate(cmd, surface); d.Verdict != safety.VerdictDeny {
 				t.Fatalf("%q on %s: guarded verdict %q, want deny", cmd, surface, d.Verdict)
 			}
+		}
+	}
+}
+
+// TestMainWritesDocumentOnFlagError runs main itself in a child process, so
+// main's wiring to executeRoot is covered, not just executeRoot.
+func TestMainWritesDocumentOnFlagError(t *testing.T) {
+	if os.Getenv("AXIS_TEST_RUN_MAIN") == "1" {
+		os.Args = append([]string{"axis"}, strings.Fields(os.Getenv("AXIS_TEST_MAIN_ARGS"))...)
+		main()
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestMainWritesDocumentOnFlagError$")
+	child.Env = append(os.Environ(), "AXIS_TEST_RUN_MAIN=1",
+		"AXIS_TEST_MAIN_ARGS=agent -p --format json --bogus-flag check", "HOME="+t.TempDir())
+	var out bytes.Buffer
+	child.Stdout = &out
+	err := child.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != ExitErrGeneric {
+		t.Fatalf("child exit = %v, want exit code %d", err, ExitErrGeneric)
+	}
+	doc := decodeOneDocument(t, out.String())
+	if doc["status"] != "failed" {
+		t.Fatalf("document = %v, want status failed", doc)
+	}
+}
+
+func TestStartupPickerNeedsTerminalAtBothEnds(t *testing.T) {
+	dir := t.TempDir()
+	tty, err := os.Create(dir + "/tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tty.Close()
+	plain, err := os.Create(dir + "/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	prev := isTerminalFile
+	t.Cleanup(func() { isTerminalFile = prev })
+	isTerminalFile = func(f *os.File) bool { return f == tty }
+
+	cases := []struct {
+		name string
+		p    agentStartupBackendParams
+		def  bool
+		want bool
+	}{
+		{"terminal stdin and output", agentStartupBackendParams{In: tty, Out: tty}, false, true},
+		{"output redirected to a file", agentStartupBackendParams{In: tty, Out: plain}, false, false},
+		{"output is a buffer", agentStartupBackendParams{In: tty, Out: &bytes.Buffer{}}, false, false},
+		{"stdin redirected", agentStartupBackendParams{In: plain, Out: tty}, false, false},
+		{"--model given", agentStartupBackendParams{In: tty, Out: tty, Model: "qwen"}, false, false},
+		{"default model configured", agentStartupBackendParams{In: tty, Out: tty}, true, false},
+		{"--select with output redirected", agentStartupBackendParams{In: plain, Out: &bytes.Buffer{}, SelectModel: true}, false, true},
+	}
+	for _, c := range cases {
+		if got := startupPickerWanted(c.p, c.def); got != c.want {
+			t.Errorf("%s: startupPickerWanted = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

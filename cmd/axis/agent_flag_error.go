@@ -101,7 +101,7 @@ func pipedJSONRequested(cmd *cobra.Command, args []string) bool {
 		for j := 0; j < len(sh); j++ {
 			f := shorthand(sh[j : j+1])
 			if f == nil {
-				break
+				continue // unknown: still look for -p in the rest, as in -xp
 			}
 			if takesValue(f) {
 				if j+1 == len(sh) && i+1 < len(args) {
@@ -118,5 +118,6 @@ func pipedJSONRequested(cmd *cobra.Command, args []string) bool {
 			}
 		}
 	}
-	return printMode && format == "json"
+	// RunE normalizes --format the same way (validateOutputFormat).
+	return printMode && strings.ToLower(strings.TrimSpace(format)) == "json"
 }
