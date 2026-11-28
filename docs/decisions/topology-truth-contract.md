@@ -101,7 +101,7 @@ This is honest, decision-relevant, and strictly more informative than the block 
 
 Measuring true edges requires each node to probe every other node — N×(N−1) connections, initiated remotely.
 
-Rejected for this contract because it would require AXIS to originate node-to-node execution as a background activity, which contradicts `docs/doctrine.md` ("agentless by default", "not a background scheduler", "no hidden agent runtime") and would expand the fact plane from *observe the grid* to *drive the grid*.
+Rejected for this contract because it would require AXIS to originate node-to-node execution as a background activity, which contradicts `docs/doctrine.md` ("not a background scheduler", "no hidden agent runtime") and would expand the fact plane from *observe the grid* to *drive the grid*.
 
 If verified edges are wanted later, they require their own decision record covering execution authority, failure semantics, cost at N nodes, and operator consent. This contract does not prejudge that; it forbids **synthesizing** edges, not measuring them under a future explicit mandate.
 

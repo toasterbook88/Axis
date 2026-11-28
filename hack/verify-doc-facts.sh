@@ -13,7 +13,8 @@
 #   3. AGENTS.md MCP tool count (total / read-only / advisory-lease) == the
 #      s.AddTool registrations in internal/mcp, with the read-only subset
 #      matching WithReadOnlyHintAnnotation(true) in server.go.
-#   4. Canonical docs do not contradict live mesh and reservation wiring.
+#   4. Canonical docs do not contradict live mesh and reservation wiring, or
+#      the bare-`axis` agent front door.
 #   5. Every released git tag >= v0.7.0 has a CHANGELOG.md entry.
 #   6. README's install pins, Latest-release row and supported security line
 #      name the newest release tag (hack/verify-release-claims.sh).
@@ -118,6 +119,17 @@ fi
 if grep -qF 'cmd.AddCommand(reservationsDoctorCmd())' cmd/axis/reservations.go; then
   reject_stale_claim 'no (standalone|dedicated).*(reservation )?CLI|planned but not scheduled' \
     docs/current-state.md docs/lifecycle.md docs/reservations.md
+fi
+
+# Bare interactive `axis` opens `axis agent` (cmd/axis/main.go). While that
+# front door exists, canonical docs must not call AXIS "agentless by default".
+if grep -qF 'return runBareAxis(cmd)' cmd/axis/main.go; then
+  if hits="$(grep -Fin 'agentless by default' README.md AGENTS.md docs/doctrine.md \
+      docs/architecture.md docs/current-state.md docs/decisions/*.md)"; then
+    fail "canonical docs call AXIS \"agentless by default\" but bare \`axis\` opens the agent (cmd/axis/main.go): $hits"
+  fi
+else
+  fail "cmd/axis/main.go no longer calls runBareAxis; if the front door moved, update the anchor in this script and the doctrine together"
 fi
 
 if grep -qF 'cmdAI := aiCmd()' cmd/axis/main.go; then

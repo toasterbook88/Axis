@@ -239,6 +239,7 @@ axis daemon status
 
 | Command | Purpose |
 | --- | --- |
+| `axis agent` | The front door: a model in a loop with tools, MCP servers and skills, reading observed facts (`--autonomy cluster\|default\|edit\|full`, `-p` one-shot) |
 | `axis version` | Build version, commit, Go version |
 | `axis init` | Interactive cluster configuration (`--config` overrides `~/.axis/nodes.yaml`; `--generate` proposes nodes from Tailscale read-only) |
 | `axis node facts` | This machine (`axis facts` is the same command; `--hardware` / `-hw` adds detailed specs and live load) |
@@ -256,7 +257,7 @@ axis daemon status
 | `axis tui` | Full-screen workspace: agent conversation, live cluster sidebar, dashboard on F2 (`--dashboard` opens the dashboard alone; `ctrl+o` command palette) |
 | `axis update` | Self-update from GitHub Releases |
 
-On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help.
+On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help. Start there.
 
 </details>
 
@@ -267,7 +268,6 @@ On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, i
 | --- | --- |
 | `axis mcp serve` | MCP server over stdio (18 read-only diagnostics + 3 advisory lease primitives) |
 | `axis mcp client` | MCP client (`list`, `tools`, `call`, …) |
-| `axis agent` | Tool-calling agent loop, subordinate to observed facts (`--autonomy cluster\|default\|edit\|full`, `-p` one-shot) |
 | `axis ai` / `axis cortex` | Inference routing and vector-memory helpers |
 
 `axis chat` and `axis llm` were removed. Use `axis agent` and `axis ai route`.
