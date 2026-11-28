@@ -123,9 +123,13 @@ Options for the maintainer:
   `configureRegistry(r, registryConfig{Scope, EagerTools, DisableDeferral, ResultCap, MCP})`,
   and call it from `New` and `buildChildAgent`. The child's config comes from the parent's
   registry at spawn time.
-- `buildChildAgent` sets `child.autonomy` to the parent's mode. It keeps the parent's
-  confirm as is: that confirm is already wrapped for the parent's mode (`agent.go:206`,
-  `:326`), so the child must not wrap it again.
+- `buildChildAgent` sets `child.autonomy` to the parent's mode. The child holds no confirm
+  of its own: it prompts through the root's current `a.confirm`, which `SetAutonomy`
+  rewraps on every mode change (`agent.go:206`, `:326`), so a mode change reaches running
+  children's prompts too.
+- The child's registry shares the root's checkpointer and todo store, which today each
+  registry makes for itself (`tools.go:76`). An edit child's write is then the session's
+  most recent mutation for the root's `undo_last` and `review_changes` (`tools_p1.go:81-86`).
 - **Approval state is shared, not copied.** Today the child gets a copy of
   `sessionApproved` and `blockAll` (`confirm.go:137-148`, `subagent.go:206`, `:239-240`), and
   an answer given to a child's prompt is written on the child alone
@@ -142,7 +146,18 @@ Options for the maintainer:
   error (`dispatch.go:124-126`). Lowering `/autonomy` on the root narrows running children
   on their next call; raising it does not widen a child past its spawn scope. The child
   reads the root's scope under the root's `dispatchMu`, the lock `SetAutonomy` writes it
-  under (`agent.go:310-319`).
+  under (`agent.go:310-319`). At the start of each round a child whose scope is above the
+  root's lowers its registry to the root's scope and refreshes its visible-tools message
+  (`agent.go:345`), so it stops advertising what it can no longer call. The refusal text
+  for a call caught between rounds says the operator lowered the session to that scope.
+- **Async children never prompt.** A sync child runs inside the parent's turn, so its
+  prompts reach the operator the way the parent's do. An async child may still be running
+  after the turn ends, when the plain REPL is reading stdin (`cmd/axis/agent_repl.go:134-157`)
+  and a prompt would race it. So a call from an async child that needs a prompt is
+  refused, as `pipedConfirm` refuses one (`cmd/axis/agent_oneshot.go:92`), with
+  an error telling the child to say in its answer what it needs approved. Session
+  approvals and auto-approved tools still run. A sync child can do approved edits; an
+  async child does only what needs no prompt.
 - `consult_model` stays hidden in the child (no resolver, `tools.go:181-186`); a child
   seat is the seat-placement direction.
 - At `maxSubAgentDepth` the child's registry withholds `spawn_subagent`: a small
@@ -173,16 +188,20 @@ are bounded reads (`head -c 32000`, `ls`, `grep`, `tools_cluster.go:94-200`). Ra
 free capacity optimizes nothing for a read. So, in `dispatchSubagent`, before building the
 child, the target comes from the first rule that applies:
 
-1. **Set by parent.** `strings.TrimSpace(sa.TargetNode)` is not empty: use it. Reason
-   `set by parent`.
+1. **Set by parent.** `strings.TrimSpace(sa.TargetNode)` is not empty and names a node in
+   `view.Config.Nodes`: use it. Reason `set by parent`. A name not in `nodes.yaml` refuses
+   the spawn with the error `runRemote` gives, which lists the available nodes
+   (`tools_cluster.go:35-39`).
 2. **No node-scoped tools.** The child's registry shows none of `remote_read_file`,
    `remote_grep` or `remote_list` (only possible under D5 option B or C): no target.
    Reason `none (no node-scoped tools at <scope>)`.
-3. **Named in the brief.** Split `objective`, `prompt`, `sources` and `boundary` into
-   tokens on whitespace and on punctuation other than `-`, `_` and `.`, and trim a trailing
+3. **Named in the brief.** Split `objective` and `prompt` into tokens on whitespace and on punctuation other than `-`, `_` and `.`, and trim a trailing
    `.` from each. Exactly one node name from `view.Config.Nodes` equals a token: use it.
-   Reason `named in brief`. A brief saying "worker-1" matches `worker-1` and not `worker`. Config names are the names `runRemote` resolves
-   (`tools_cluster.go:35-39`), so the target is always reachable by the child's tools.
+   Reason `named in brief`. A brief saying "worker-1" matches `worker-1` and not `worker`.
+   `sources` and `boundary` are left out because `boundary` lists what the child must not
+   do (`subagent.go:54`), so a node named there is the one to avoid. Matching is
+   case-sensitive, as `findNode` is (`tools_cluster.go:15-22`). Config names are the names
+   `runRemote` resolves, so a rule 1 or rule 3 target is always reachable by the child.
 4. **Ranked.** `reqs := placement.InferRequirements(objective + "\n" + prompt)` matched a
    workload profile (`reqs.Workload.Class != models.ClassUnknown`, see
    `internal/workload/match.go:41-45`): reload the view under `dispatchMu` the way cluster
@@ -192,7 +211,9 @@ child, the target comes from the first rule that applies:
    `placement suggests for <class>: <decisive criterion>, <metric name> = <value><unit>`,
    built from the decision's ranking. The child only reads on that node (D5), so the word
    is suggests: the ranker picks where the task's work would fit, and the receipt does
-   not claim the child runs it there. Not OK: no target, reason `placement: no eligible node (N excluded)`.
+   not claim the child runs it there. Not OK: no target, reason `placement: no eligible
+   node (N excluded)`. A failed or missing reload (`dispatch.go:142`) falls through to
+   rule 5 with reason `none (cluster view unavailable)`.
 5. **Otherwise** no target. Reason `none (not set by parent)`. The child picks with its
    remote tools.
 
@@ -254,15 +275,26 @@ Options for the maintainer:
 - Sync children already run on the parent's turn context (`subagent.go:154`) and are
   unchanged.
 - **A child finishes its own async tasks before it returns.** When a child's `Run`
-  returns, `dispatchSubagent` waits for every task still running in that child's store,
-  then appends each one's receipt line and result (or error) to the child's answer. Each
-  grandchild is bounded by its own `max_turns`, so the wait ends; a session cancel ends it
-  at once. This is the behavior the Claude Code docs give a subagent with background
+  returns, `dispatchSubagent` waits for every task still running in that child's store.
+  The wait selects on the dispatch context too: the turn ctx for a sync child, the task
+  ctx for an async one. When that context ends first (Ctrl-C, the `-p` timeout from
+  `cmd/axis/agent_oneshot.go:139`, or a session cancel), the child's `sessionCtx` is
+  cancelled and its open tasks end as `cancelled`. Then each task's result is appended to
+  the child's answer under a line `nested <parent-id>/<id>: <outcome>`, where
+  `<parent-id>` is the child's own task id, or `sync` for a sync child. Folded results
+  carry no `check_task` hint, because each store numbers from `bg-1`
+  (`async_tasks.go:138-143`) and the parent's `check_task` reads only its own store. This is the behavior the Claude Code docs give a subagent with background
   subagents (Research). No grandchild is left in a store nobody reads, and the root store
   holds every task the root's model can query.
+- In `-p`, Close runs right after the answer, so an async child the model did not wait on
+  is cancelled and reported by the exit line. The async branch of `spawn_subagent`'s
+  description says so.
+- At cluster scope `check_task` and `list_background_tasks` are hidden with the rest of
+  D1's tools, and running children are capped to cluster. Raising the mode again shows
+  the tasks; nothing is lost.
 
-The word `cancelled` matches A2A and MCP task states. If DEA-31 lands a shared state
-vocabulary first, D6 uses its word.
+The word `cancelled` matches MCP task states; A2A spells it `canceled`. DEA-31's spec
+defines `RunStateCancelled = "cancelled"`; D6 uses that word.
 
 ### D7. The child's result uses `LastRunOutcome`
 
@@ -292,7 +324,9 @@ sub-agent bg-3 async | node: builder (named in brief) | scope: observe | depth: 
 sub-agent sync | node: worker-1 (placement suggests for go-build: allocatable_capacity, allocatable_ram = 7168MB) | scope: edit | depth: 1 | max_turns: 6 | outcome: answered 4/6
 ```
 
-Async receipts end with the existing `check_task` hint (`subagent.go:145-146`). Sync
+An async receipt line is followed by the existing return text unchanged, "Sub-agent task
+bg-N started in background on ... Use `check_task` ..." (`subagent.go:145-146`), which
+`subagent_test.go:87` and `:131` pin. Sync
 receipts carry `outcome: <stop> <turns>/<max_turns>` from D7. The line is text in a tool
 result, read by the parent model; no JSON shape changes.
 
@@ -348,7 +382,8 @@ External prior art:
   since axis has no main-conversation channel a grandchild could report to.
 - A2A `TaskState` ([`specification/a2a.proto`](https://raw.githubusercontent.com/a2aproject/A2A/main/specification/a2a.proto))
   and MCP tasks ([2025-11-25 tasks](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/specification/2025-11-25/basic/utilities/tasks.mdx))
-  both have a cancelled terminal state; D6 uses the same word.
+  both have a cancelled terminal state, spelled `canceled` in A2A and `cancelled` in MCP;
+  D6 uses the MCP spelling, as DEA-31 does.
 
 Optimization: request size. Measured at `ab2adcc` with a throwaway test marshalling
 `Defs()` for a session with no MCP tools: observe sends 13 tools in 6565 bytes. Made
@@ -398,7 +433,20 @@ for briefs that match a workload profile.
 - cmd/axis tests assert the `cancelled N open sub-agent task(s)` line on the error writer
   for the one-shot path and for the startup console, and no line when nothing was open.
 - A `go test -race` case changes `/autonomy` on the root while an async child dispatches.
-- D4 table adds a config with both `worker` and `worker-1` and a brief naming `worker-1`.
+- D4 table adds a config with both `worker` and `worker-1` and a brief naming `worker-1`;
+  a node named only in `boundary` (falls through); a rule 1 name not in `nodes.yaml`
+  (spawn refused); a nil or failing reload (rule 5).
+- Cancelling the turn ctx while a sync child waits on a running grandchild returns at
+  once, with the grandchild `cancelled` in the folded result. The folded text is pinned:
+  `nested sync/bg-1: ...` with no `check_task` hint.
+- An edit child writes a file, then the root's `undo_last` restores that write.
+- An async edit child's `write_file` is refused without a prompt; a sync edit child's
+  prompts the operator once. A plain-REPL test confirms no prompt is read while the REPL
+  waits for input.
+- After the root drops from edit to observe, a running child's next round shows no edit
+  tools in its `Defs()` and system message. A table over mode transitions (full to edit,
+  edit to default, default to edit) checks the child prompts through the root's current
+  confirm.
 - A child that hits its ceiling returns the turn-ceiling error, sync and async, with the
   receipt line first; answered and failed paths keep their current text after the receipt.
 - Existing subagent tests (`internal/agent/subagent_test.go`) stay green; run the hermetic
